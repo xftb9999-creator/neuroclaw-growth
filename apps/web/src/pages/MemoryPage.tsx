@@ -6,6 +6,7 @@ import {
   updateMemoryRecord
 } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
+import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader } from "../components/ui/Card.js";
 import { Badge, Skeleton, Textarea } from "../components/ui/Input.js";
@@ -17,6 +18,7 @@ export function MemoryPage(props: {
   onWorkspaceMissing: (message: string) => void;
   onOpenRun: (runId: string) => void;
 }) {
+  const { t } = useI18n();
   const [records, setRecords] = useState<MemoryRecord[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftSummary, setDraftSummary] = useState("");
@@ -28,14 +30,12 @@ export function MemoryPage(props: {
       const items = (await listWorkspaceMemory(props.workspaceId)) as MemoryRecord[];
       setRecords(items);
       setError(null);
-    } catch (error) {
-      if (isWorkspaceMissingError(error)) {
-        props.onWorkspaceMissing(
-          "Your workspace expired after a backend reset. Create a new workspace to rebuild memory."
-        );
+    } catch (loadError) {
+      if (isWorkspaceMissingError(loadError)) {
+        props.onWorkspaceMissing(t("memory.workspaceExpired"));
         return;
       }
-      setError(error instanceof Error ? error.message : "Failed to load memory");
+      setError(loadError instanceof Error ? loadError.message : t("memory.loadError"));
     } finally {
       setLoading(false);
     }
@@ -43,6 +43,7 @@ export function MemoryPage(props: {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.workspaceId]);
 
   const startEdit = (record: MemoryRecord) => {
@@ -51,10 +52,7 @@ export function MemoryPage(props: {
   };
 
   return (
-    <RouteLayout
-      title="Memory Settings"
-      subtitle="Curate the reusable memory created by completed runs."
-    >
+    <RouteLayout title={t("memory.title")} subtitle={t("memory.subtitle")}>
       <ErrorBanner error={error} />
       {loading && (
         <div
@@ -79,10 +77,7 @@ export function MemoryPage(props: {
         </div>
       )}
       {!loading && records.length === 0 ? (
-        <EmptyState
-          title="No memory yet"
-          body="Completed runs will automatically create memory records you can pin, suppress, edit, or delete."
-        />
+        <EmptyState title={t("memory.emptyTitle")} body={t("memory.emptyBody")} />
       ) : (
         !loading && (
           <div className="grid gap-4">
@@ -100,9 +95,9 @@ export function MemoryPage(props: {
                       variant="secondary"
                       size="sm"
                       onClick={() => props.onOpenRun(record.sourceRunId)}
-                      aria-label="Open source run"
+                      aria-label={t("memory.sourceRunAria")}
                     >
-                      Source Run
+                      {t("memory.sourceRun")}
                     </Button>
                     <Button
                       data-testid={`pin-${record.id}`}
@@ -113,7 +108,7 @@ export function MemoryPage(props: {
                         await load();
                       }}
                     >
-                      {record.isPinned ? "Unpin" : "Pin"}
+                      {record.isPinned ? t("memory.unpin") : t("memory.pin")}
                     </Button>
                     <Button
                       data-testid={`suppress-${record.id}`}
@@ -126,7 +121,7 @@ export function MemoryPage(props: {
                         await load();
                       }}
                     >
-                      {record.isSuppressed ? "Unsuppress" : "Suppress"}
+                      {record.isSuppressed ? t("memory.unsuppress") : t("memory.suppress")}
                     </Button>
                   </div>
                 </CardHeader>
@@ -137,7 +132,7 @@ export function MemoryPage(props: {
                         data-testid={`edit-memory-${record.id}`}
                         value={draftSummary}
                         onChange={(event) => setDraftSummary(event.target.value)}
-                        aria-label="Edit memory summary"
+                        aria-label={t("memory.editAria")}
                       />
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -148,14 +143,14 @@ export function MemoryPage(props: {
                             await load();
                           }}
                         >
-                          Save
+                          {t("memory.save")}
                         </Button>
                         <Button
                           variant="secondary"
                           size="sm"
                           onClick={() => setEditingId(null)}
                         >
-                          Cancel
+                          {t("memory.cancel")}
                         </Button>
                       </div>
                     </div>
@@ -171,7 +166,7 @@ export function MemoryPage(props: {
                         size="sm"
                         onClick={() => startEdit(record)}
                       >
-                        Edit
+                        {t("memory.edit")}
                       </Button>
                     )}
                     <Button
@@ -183,7 +178,7 @@ export function MemoryPage(props: {
                         await load();
                       }}
                     >
-                      Delete
+                      {t("memory.delete")}
                     </Button>
                   </div>
                 </CardContent>

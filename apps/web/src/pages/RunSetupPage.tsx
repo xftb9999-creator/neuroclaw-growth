@@ -11,6 +11,7 @@ import {
 } from "../lib/forms.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
 import { clearRunDraft, readRunDraft } from "../lib/router.js";
+import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card } from "../components/ui/Card.js";
 import { Input, Label, Textarea } from "../components/ui/Input.js";
@@ -19,12 +20,15 @@ import type { TemplateType } from "../types.js";
 
 function validateRequiredValues(
   fields: FormFieldConfig[],
-  values: Record<string, string>
+  values: Record<string, string>,
+  fieldRequiredTemplate: (label: string) => string
 ): string | null {
   for (const field of fields) {
     const raw = values[field.name] ?? "";
 
     if (!field.required) continue;
+
+    const label = field.label;
 
     if (field.type === "channels") {
       if (
@@ -33,13 +37,13 @@ function validateRequiredValues(
           .map((item) => item.trim())
           .filter(Boolean).length === 0
       ) {
-        return `${field.label} is required`;
+        return fieldRequiredTemplate(label);
       }
       continue;
     }
 
     if (!raw.trim()) {
-      return `${field.label} is required`;
+      return fieldRequiredTemplate(label);
     }
   }
 
@@ -52,6 +56,7 @@ export function RunSetupPage(props: {
   onWorkspaceMissing: (message: string) => void;
   onCreated: (runId: string) => void;
 }) {
+  const { t } = useI18n();
   const fields = getTemplateFormFields(props.templateType as TemplateFormType);
   const [values, setValues] = useState<Record<string, string>>(() =>
     createEmptyFormValues(props.templateType as TemplateFormType)
@@ -70,15 +75,17 @@ export function RunSetupPage(props: {
     }
 
     setValues(denormalizeFormInput(props.templateType as TemplateFormType, draft.input));
-    setPrefillLabel(`Reusing input from ${draft.sourceRunId}`);
+    setPrefillLabel(t("setup.prefill", { runId: draft.sourceRunId }));
     clearRunDraft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.templateType]);
 
+  const fieldLabel = (name: string, fallback: string) => t(`fields.${name}`) === `fields.${name}`
+    ? fallback
+    : t(`fields.${name}`);
+
   return (
-    <RouteLayout
-      title="Configure Your Run"
-      subtitle="Fill the minimum input contract for this template and launch the run."
-    >
+    <RouteLayout title={t("setup.title")} subtitle={t("setup.subtitle")}>
       <Card>
         <form
           className="grid gap-4 max-w-3xl"
@@ -88,7 +95,14 @@ export function RunSetupPage(props: {
             setIsSubmitting(true);
 
             try {
-              const validationError = validateRequiredValues(fields, values);
+              const validationError = validateRequiredValues(
+                fields.map((field) => ({
+                  ...field,
+                  label: fieldLabel(field.name, field.label)
+                })),
+                values,
+                (label) => t("setup.fieldRequired", { field: label })
+              );
               if (validationError) {
                 throw new Error(validationError);
               }
@@ -102,12 +116,10 @@ export function RunSetupPage(props: {
               props.onCreated(run.id);
             } catch (error) {
               if (isWorkspaceMissingError(error)) {
-                props.onWorkspaceMissing(
-                  "Your workspace expired after a backend reset. Create a new workspace to continue."
-                );
+                props.onWorkspaceMissing(t("setup.workspaceExpired"));
                 return;
               }
-              setError(error instanceof Error ? error.message : "Failed to create run");
+              setError(error instanceof Error ? error.message : t("status.loadError"));
             } finally {
               setIsSubmitting(false);
             }
@@ -117,7 +129,7 @@ export function RunSetupPage(props: {
           {prefillLabel && <InfoBanner message={prefillLabel} />}
           {fields.map((field) => (
             <Label key={field.name}>
-              <span>{field.label}</span>
+              <span>{fieldLabel(field.name, field.label)}</span>
               {field.type === "textarea" ? (
                 <Textarea
                   data-testid={`field-${field.name}`}
@@ -144,9 +156,9 @@ export function RunSetupPage(props: {
             data-testid="launch-run"
             type="submit"
             disabled={isSubmitting}
-            aria-label={isSubmitting ? "Launching run" : "Launch run"}
+            aria-label={isSubmitting ? t("setup.launchingAria") : t("setup.launchedAria")}
           >
-            {isSubmitting ? "Launching..." : "Launch Run"}
+            {isSubmitting ? t("setup.launching") : t("setup.launch")}
           </Button>
         </form>
       </Card>

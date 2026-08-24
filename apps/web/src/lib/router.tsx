@@ -2,8 +2,10 @@ import { runDraftStorageKey, workspaceStorageKey } from "./workspace.js";
 import type { ClonedRunPayload, Route, TemplateType } from "../types.js";
 
 export function parseRoute(pathname: string): Route {
-  if (pathname === "/" || pathname === "/onboarding") return { name: "onboarding" };
+  if (pathname === "/onboarding") return { name: "onboarding" };
+  if (pathname === "/" || pathname === "/home") return { name: "home" };
   if (pathname === "/templates") return { name: "templates" };
+  if (pathname === "/profile") return { name: "profile" };
   if (pathname === "/history") return { name: "history" };
   if (pathname === "/memory") return { name: "memory" };
 

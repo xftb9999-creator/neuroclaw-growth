@@ -10,7 +10,7 @@ import {
 import { cn } from "../../lib/cn.js";
 
 const inputBase =
-  "w-full border border-line bg-white rounded-input px-4 py-3 text-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand";
+  "w-full border border-line bg-white/[0.04] rounded-input px-4 py-3 text-ink placeholder:text-muted/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand transition-colors hover:border-line-strong";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => {
@@ -42,16 +42,16 @@ export const Label = forwardRef<HTMLLabelElement, LabelHTMLAttributes<HTMLLabelE
 Label.displayName = "Label";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-pill px-3 py-1 text-sm font-medium capitalize",
+  "inline-flex items-center rounded-pill px-3 py-1 text-sm font-medium capitalize border",
   {
     variants: {
       variant: {
-        default: "bg-brand-light text-brand-dark",
-        completed: "bg-ok-light text-ok",
-        waiting: "bg-warn-light text-warn",
-        failed: "bg-danger-light text-danger",
-        running: "bg-brand-light text-brand-dark",
-        info: "bg-brand-light text-brand-dark"
+        default: "bg-brand-light text-brand border-brand-dark/40",
+        completed: "bg-ok-light text-ok border-ok/30",
+        waiting: "bg-warn-light text-warn border-warn/30",
+        failed: "bg-danger-light text-danger border-danger/30",
+        running: "bg-brand-light text-brand border-brand-dark/40",
+        info: "bg-surface-strong text-muted border-line-strong"
       }
     },
     defaultVariants: {

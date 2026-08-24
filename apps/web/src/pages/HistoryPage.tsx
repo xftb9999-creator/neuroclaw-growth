@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { listRunHistory } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
 import { navigate } from "../lib/router.js";
+import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardHeader } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
@@ -15,6 +16,7 @@ export function HistoryPage(props: {
   onOpenRun: (runId: string) => void;
   onReuse: (runId: string) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,14 +26,12 @@ export function HistoryPage(props: {
       const items = (await listRunHistory(props.workspaceId)) as RunRecord[];
       setRuns(items);
       setError(null);
-    } catch (error) {
-      if (isWorkspaceMissingError(error)) {
-        props.onWorkspaceMissing(
-          "Your workspace expired after a backend reset. Create a new workspace to reload history."
-        );
+    } catch (loadError) {
+      if (isWorkspaceMissingError(loadError)) {
+        props.onWorkspaceMissing(t("history.workspaceExpired"));
         return;
       }
-      setError(error instanceof Error ? error.message : "Failed to load history");
+      setError(loadError instanceof Error ? loadError.message : t("history.loadError"));
     } finally {
       setLoading(false);
     }
@@ -39,13 +39,11 @@ export function HistoryPage(props: {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.workspaceId]);
 
   return (
-    <RouteLayout
-      title="Run History"
-      subtitle="Review previous runs, inspect outcomes, and reuse a working input set."
-    >
+    <RouteLayout title={t("history.title")} subtitle={t("history.subtitle")}>
       <ErrorBanner error={error} />
       {loading && (
         <div
@@ -73,11 +71,11 @@ export function HistoryPage(props: {
       )}
       {!loading && runs.length === 0 ? (
         <EmptyState
-          title="No runs yet"
-          body="Launch your first Growth run to start building reusable execution history."
+          title={t("history.emptyTitle")}
+          body={t("history.emptyBody")}
           action={
             <Button variant="secondary" onClick={() => navigate("/templates")}>
-              Go to Templates
+              {t("history.goTemplates")}
             </Button>
           }
         />
@@ -89,13 +87,13 @@ export function HistoryPage(props: {
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                   <div className="grid gap-1 flex-1 min-w-[200px]">
                     <CardHeader>
-                      <Badge variant="info">
-                        {run.templateType.replaceAll("_", " ")}
+                      <Badge variant="default">
+                        {t(`templates.names.${run.templateType}`)}
                       </Badge>
                     </CardHeader>
                     <h3 className="text-base font-semibold m-0">{run.id}</h3>
                     <p className="text-sm text-muted m-0">
-                      {run.outputSummary ?? run.failureReason ?? "No summary available yet."}
+                      {run.outputSummary ?? run.failureReason ?? t("history.noSummary")}
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-2">
@@ -108,7 +106,7 @@ export function HistoryPage(props: {
                         size="sm"
                         onClick={() => props.onOpenRun(run.id)}
                       >
-                        Open
+                        {t("history.open")}
                       </Button>
                       <Button
                         data-testid={`clone-${run.id}`}
@@ -116,7 +114,7 @@ export function HistoryPage(props: {
                         size="sm"
                         onClick={() => void props.onReuse(run.id)}
                       >
-                        Clone
+                        {t("history.clone")}
                       </Button>
                     </div>
                   </div>

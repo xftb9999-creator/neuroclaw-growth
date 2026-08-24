@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { approveRun, getRun, listApprovals } from "../lib/api.js";
 import { useAiStream } from "../lib/useAiStream.js";
+import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
@@ -13,6 +14,7 @@ export function RunStatusPage(props: {
   onViewResult: (runId: string) => void;
   onRunAgain: (run: RunRecord) => void;
 }) {
+  const { t } = useI18n();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +32,8 @@ export function RunStatusPage(props: {
       setRun(runRecord as RunRecord);
       setApprovals(approvalItems as ApprovalRequest[]);
       setError(null);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Failed to load run");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : t("status.loadError"));
     } finally {
       setLoading(false);
     }
@@ -39,15 +41,13 @@ export function RunStatusPage(props: {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.runId]);
 
   const activeApproval = approvals.find((approval) => approval.status === "pending");
 
   return (
-    <RouteLayout
-      title="Run Status"
-      subtitle="Review execution progress, approval state, and step-level outcomes."
-    >
+    <RouteLayout title={t("status.title")} subtitle={t("status.subtitle")}>
       <ErrorBanner error={error} />
       {loading && (
         <div role="status" aria-live="polite" aria-busy={loading}>
@@ -70,18 +70,18 @@ export function RunStatusPage(props: {
             </CardHeader>
             <CardContent>
               <p className="text-muted m-0">
-                {run.failureReason ?? "Execution is ready for review."}
+                {run.failureReason ?? t("status.readyForReview")}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button data-testid="refresh-run" variant="outline" onClick={() => void load()}>
-                  Refresh
+                  {t("status.refresh")}
                 </Button>
                 {run.status === "completed" && (
                   <Button
                     data-testid="view-result"
                     onClick={() => props.onViewResult(run.id)}
                   >
-                    View Result
+                    {t("status.viewResult")}
                   </Button>
                 )}
                 <Button
@@ -89,14 +89,14 @@ export function RunStatusPage(props: {
                   variant="secondary"
                   onClick={() => props.onRunAgain(run)}
                 >
-                  Run Again
+                  {t("status.runAgain")}
                 </Button>
               </div>
             </CardContent>
           </Card>
 
           <Card>
-            <CardTitle>Step Timeline</CardTitle>
+            <CardTitle>{t("status.stepTimeline")}</CardTitle>
             <CardContent>
               <ol className="grid gap-3 list-none p-0 m-0">
                 {(run.stepResults ?? []).map((step) => (
@@ -120,7 +120,7 @@ export function RunStatusPage(props: {
           {activeApproval && (
             <Card>
               <CardHeader>
-                <Badge variant="waiting">Approval Needed</Badge>
+                <Badge variant="waiting">{t("status.approvalNeeded")}</Badge>
               </CardHeader>
               <CardTitle>{activeApproval.actionType}</CardTitle>
               <CardContent>
@@ -138,14 +138,16 @@ export function RunStatusPage(props: {
                         })) as RunRecord;
                         setRun(updated);
                         await load();
-                      } catch (error) {
-                        setError(error instanceof Error ? error.message : "Approval failed");
+                      } catch (approveError) {
+                        setError(
+                          approveError instanceof Error ? approveError.message : t("status.loadError")
+                        );
                       } finally {
                         setIsUpdating(false);
                       }
                     }}
                   >
-                    Approve
+                    {t("status.approve")}
                   </Button>
                   <Button
                     data-testid="reject-run"
@@ -161,14 +163,16 @@ export function RunStatusPage(props: {
                         })) as RunRecord;
                         setRun(updated);
                         await load();
-                      } catch (error) {
-                        setError(error instanceof Error ? error.message : "Rejection failed");
+                      } catch (rejectError) {
+                        setError(
+                          rejectError instanceof Error ? rejectError.message : t("status.loadError")
+                        );
                       } finally {
                         setIsUpdating(false);
                       }
                     }}
                   >
-                    Reject
+                    {t("status.reject")}
                   </Button>
                 </div>
               </CardContent>
@@ -176,19 +180,19 @@ export function RunStatusPage(props: {
           )}
 
           {(run.status === "running" || run.status === "completed") && (
-            <section aria-label="AI Preview Stream">
+            <section aria-label={t("status.stream.title")}>
               <Card>
                 <CardHeader>
-                  <CardTitle>Stream AI Preview</CardTitle>
-                  {ai.state.isMock && <Badge variant="info">Mock Mode</Badge>}
+                  <CardTitle>{t("status.stream.title")}</CardTitle>
+                  {ai.state.isMock && <Badge variant="info">{t("status.stream.mock")}</Badge>}
                 </CardHeader>
                 <CardContent>
                   {ai.state.status === "idle" && (
                     <Button
                       onClick={() => ai.stream(run.templateType, run.input)}
-                      aria-label="Generate AI preview for this run"
+                      aria-label={t("status.stream.generate")}
                     >
-                      Generate AI Preview
+                      {t("status.stream.generate")}
                     </Button>
                   )}
 
@@ -201,8 +205,8 @@ export function RunStatusPage(props: {
                     >
                       <p className="text-sm text-muted m-0">
                         {ai.state.status === "connecting"
-                          ? "Connecting to AI stream..."
-                          : "Streaming AI output..."}
+                          ? t("status.stream.connecting")
+                          : t("status.stream.streaming")}
                       </p>
                       <Skeleton className="h-4 w-full" />
                       <Skeleton className="h-4 w-3/4" />
@@ -211,9 +215,9 @@ export function RunStatusPage(props: {
                         variant="outline"
                         size="sm"
                         onClick={ai.reset}
-                        aria-label="Cancel AI preview stream"
+                        aria-label={t("status.stream.cancel")}
                       >
-                        Cancel
+                        {t("status.stream.cancel")}
                       </Button>
                     </div>
                   )}
@@ -222,7 +226,7 @@ export function RunStatusPage(props: {
                     (ai.state.status === "streaming" ||
                       ai.state.status === "connecting") && (
                       <pre
-                        className="text-sm text-ink overflow-auto bg-bg rounded-input p-3 m-0 whitespace-pre-wrap break-words"
+                        className="text-sm text-ink overflow-auto bg-bg-elev border border-line rounded-input p-3 m-0 whitespace-pre-wrap break-words"
                         aria-live="polite"
                       >
                         {JSON.stringify(ai.state.partial, null, 2)}
@@ -232,19 +236,19 @@ export function RunStatusPage(props: {
                   {ai.state.status === "done" && (
                     <div role="status" aria-live="polite" className="grid gap-3">
                       {ai.state.result ? (
-                        <pre className="text-sm text-ink overflow-auto bg-bg rounded-input p-3 m-0 whitespace-pre-wrap break-words">
+                        <pre className="text-sm text-ink overflow-auto bg-bg-elev border border-line rounded-input p-3 m-0 whitespace-pre-wrap break-words">
                           {JSON.stringify(ai.state.result, null, 2)}
                         </pre>
                       ) : (
-                        <p className="text-muted m-0">Stream completed.</p>
+                        <p className="text-muted m-0">{t("status.stream.done")}</p>
                       )}
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={ai.reset}
-                        aria-label="Clear AI preview"
+                        aria-label={t("status.stream.clear")}
                       >
-                        Clear
+                        {t("status.stream.clear")}
                       </Button>
                     </div>
                   )}
@@ -254,7 +258,7 @@ export function RunStatusPage(props: {
                       <div
                         role="alert"
                         aria-live="assertive"
-                        className="bg-danger-light text-danger rounded-input p-3"
+                        className="bg-danger-light text-danger rounded-input p-3 border border-danger/25"
                       >
                         {ai.state.error}
                       </div>
@@ -262,9 +266,9 @@ export function RunStatusPage(props: {
                         variant="outline"
                         size="sm"
                         onClick={() => ai.stream(run.templateType, run.input)}
-                        aria-label="Retry AI preview"
+                        aria-label={t("status.stream.retry")}
                       >
-                        Retry
+                        {t("status.stream.retry")}
                       </Button>
                     </div>
                   )}

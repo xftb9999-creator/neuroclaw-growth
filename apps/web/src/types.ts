@@ -68,7 +68,9 @@ export interface ClonedRunPayload {
 
 export type Route =
   | { name: "onboarding" }
+  | { name: "home" }
   | { name: "templates" }
+  | { name: "profile" }
   | { name: "history" }
   | { name: "memory" }
   | { name: "run-setup"; templateType: TemplateType }

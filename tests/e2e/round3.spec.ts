@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  // E2E 断言基于英文文案;界面默认中文,这里固定测试语言环境。
+  await page.addInitScript(() => {
+    window.localStorage.setItem("neuroclaw.locale", "en-US");
+  });
+});
+
 async function createWorkspace(page: import("@playwright/test").Page, name = "Growth Lab") {
   await page.goto("/onboarding");
   await page.getByTestId("workspace-name").fill(name);
@@ -68,7 +75,7 @@ test("desktop history supports clone and rerun prefill", async ({ page, isMobile
   await createWorkspace(page, "History Growth Lab");
   await createCompletedContentRun(page);
   await page.goto("/history");
-  await expect(page.getByText("content acquisition")).toBeVisible();
+  await expect(page.getByText(/content acquisition/i)).toBeVisible();
   await page.getByTestId(/clone-run_/).click();
   await expect(page).toHaveURL(/\/runs\/new\/content_acquisition$/);
   await expect(page.getByTestId("field-businessSummary")).toHaveValue("Launch a founder-led campaign");
@@ -103,7 +110,7 @@ test("mobile history remains readable", async ({ page, isMobile }) => {
   await createWorkspace(page, "Mobile History Lab");
   await createCompletedContentRun(page);
   await page.goto("/history");
-  await expect(page.getByText("content acquisition")).toBeVisible();
+  await expect(page.getByText(/content acquisition/i)).toBeVisible();
 });
 
 test("desktop stale workspace recovery returns the user to onboarding", async ({ page, isMobile }) => {

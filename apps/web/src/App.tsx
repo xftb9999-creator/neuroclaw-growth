@@ -1,7 +1,9 @@
 import { startTransition, useEffect, useState } from "react";
 import { cloneRun } from "./lib/api.js";
 import { clearRunDraft, clearWorkspaceId, navigate, parseRoute, readWorkspaceId, writeRunDraft, writeWorkspaceId } from "./lib/router.js";
+import { BrandProfilePage } from "./pages/BrandProfilePage.js";
 import { HistoryPage } from "./pages/HistoryPage.js";
+import { HomePage } from "./pages/HomePage.js";
 import { MemoryPage } from "./pages/MemoryPage.js";
 import { OnboardingPage } from "./pages/OnboardingPage.js";
 import { ResultDetailPage } from "./pages/ResultDetailPage.js";
@@ -34,8 +36,12 @@ export function App() {
 
   if (route.name === "onboarding" || !workspaceId)
     return <OnboardingPage sessionNotice={sessionNotice} onCreated={(id) => { persist(id); go("/templates"); }} />;
+  if (route.name === "home")
+    return <HomePage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
   if (route.name === "templates")
     return <TemplatePickerPage onSelect={(t) => go(`/runs/new/${t}`)} />;
+  if (route.name === "profile")
+    return <BrandProfilePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
   if (route.name === "history")
     return <HistoryPage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)}
       onReuse={async (id) => { const p = (await cloneRun(id)) as ClonedRunPayload; writeRunDraft(p); go(`/runs/new/${p.templateType}`); }} />;
