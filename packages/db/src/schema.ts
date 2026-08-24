@@ -88,3 +88,21 @@ export const jobAttempts = sqliteTable("job_attempts", {
   startedAt: text("started_at").notNull(),
   completedAt: text("completed_at")
 });
+
+// ---------------------------------------------------------------------------
+// Custom agents — data-driven agent definitions (J2)
+// ---------------------------------------------------------------------------
+
+export const agents = sqliteTable("agents", {
+  id: text("id").primaryKey(),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  baseEngine: text("base_engine").notNull(),
+  persona: text("persona").notNull(),
+  description: text("description"),
+  focusAreas: text("focus_areas"), // JSON string[]
+  outputStyle: text("output_style").notNull().default("structured"),
+  toolNames: text("tool_names"), // JSON string[]
+  status: text("status").notNull().default("active"), // 'active' | 'inactive'
+  createdAt: text("created_at").notNull()
+});

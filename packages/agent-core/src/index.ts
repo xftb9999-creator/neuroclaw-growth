@@ -234,6 +234,85 @@ Identify key market insights, customer pain points, and channel opportunities.`
 }
 
 // ---------------------------------------------------------------------------
+// Custom-agent structured generation (J2) — persona + dynamic output schema
+// ---------------------------------------------------------------------------
+
+export interface OutputFieldLike {
+  name: string;
+  type: "string" | "string[]" | "number";
+  required?: boolean;
+  description?: string;
+}
+
+export function buildOutputZodSchema(fields: OutputFieldLike[]) {
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const field of fields) {
+    let base: z.ZodTypeAny;
+    if (field.type === "string[]") base = z.array(z.string());
+    else if (field.type === "number") base = z.number();
+    else base = z.string();
+    if (field.description) base = base.describe(field.description);
+    shape[field.name] = field.required === false ? base.optional() : base;
+  }
+  return z.object(shape).passthrough();
+}
+
+export function buildCustomInstruction(
+  instruction: string,
+  input: TemplateInputPayload,
+  focusAreas: string[] = []
+): string {
+  const inputDump = JSON.stringify(input, null, 2);
+  const focus = focusAreas.length > 0 ? `\nFocus areas: ${focusAreas.join(", ")}` : "";
+  return `${instruction}${focus}\n\nRun input (JSON):\n${inputDump}`;
+}
+
+function mockStructuredOutput(fields: OutputFieldLike[], input: TemplateInputPayload) {
+  const topic = String(input.businessSummary ?? "the campaign");
+  const audience = String(input.targetCustomer ?? "your audience");
+  const output: Record<string, unknown> = {};
+
+  for (const field of fields) {
+    if (field.required === false && field.type !== "string") {
+      continue;
+    }
+    if (field.type === "string[]") {
+      output[field.name] = [
+        `Angle one for ${topic} targeting ${audience}`,
+        `Angle two with proof and social evidence`,
+        `Angle three built around a single clear call-to-action`
+      ];
+    } else if (field.type === "number") {
+      output[field.name] = 7;
+    } else {
+      output[field.name] = `Draft prepared by your custom employee for ${topic}, tuned for ${audience}.`;
+    }
+  }
+  return output;
+}
+
+export async function generateStructuredForAgent(opts: {
+  persona: string;
+  instruction: string;
+  fields: OutputFieldLike[];
+  input: TemplateInputPayload;
+}): Promise<Record<string, unknown>> {
+  const model = getModel();
+  if (!model) {
+    return mockStructuredOutput(opts.fields, opts.input);
+  }
+
+  const result = await generateObject({
+    model,
+    schema: buildOutputZodSchema(opts.fields),
+    system: opts.persona,
+    prompt: opts.instruction
+  });
+
+  return result.object as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
 // Streaming generation (for real-time AI responses via SSE)
 // ---------------------------------------------------------------------------
 

@@ -102,3 +102,56 @@ export function deleteMemoryRecord(memoryId: string) {
     method: "DELETE"
   });
 }
+
+// ---------------------------------------------------------------------------
+// Custom agents (J2) + MCP capability square
+// ---------------------------------------------------------------------------
+
+export interface AgentRecord {
+  id: string;
+  slug: string;
+  name: string;
+  baseEngine: string;
+  persona: string;
+  description: string;
+  outputStyle: string;
+  status: string;
+  createdAt: string;
+}
+
+export function listAgents() {
+  return request("/api/agents");
+}
+
+export function createAgent(payload: {
+  slug: string;
+  name: string;
+  baseEngine: string;
+  persona: string;
+  description?: string;
+  focusAreas?: string[];
+  outputStyle?: "structured" | "checklist" | "copy";
+  toolNames?: string[];
+}) {
+  return request("/api/agents", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateAgentStatus(agentId: string, status: "active" | "inactive") {
+  return request(`/api/agents/${agentId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+}
+
+export interface McpStatusResponse {
+  available: boolean;
+  servers: Array<{ name: string; connected: boolean; toolCount: number; lastError?: string }>;
+  tools: Array<{ connection: string; name: string; description?: string }>;
+}
+
+export function fetchMcpStatus() {
+  return request<McpStatusResponse>("/api/mcp/status");
+}

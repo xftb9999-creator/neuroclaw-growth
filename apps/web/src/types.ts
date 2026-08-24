@@ -72,6 +72,8 @@ export type Route =
   | { name: "templates" }
   | { name: "profile" }
   | { name: "launch"; query?: string }
+  | { name: "agents" }
+  | { name: "agent-new" }
   | { name: "history" }
   | { name: "memory" }
   | { name: "run-setup"; templateType: TemplateType }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { createRun } from "../lib/api.js";
+import { createRun, listTemplates } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
 import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
@@ -49,6 +49,49 @@ function detectIntent(query: string): TemplateType {
   return "content_acquisition";
 }
 
+/**
+ * J2-C 智能匹配:目标文本 × 全量智能体(内置+定制)关键词重合度排序。
+ * 定制智能体命中度更高时优先生效,实现"最佳工作流适配"。
+ */
+function useSmartAgentPick(query: string | undefined) {
+  const [catalog, setCatalog] = useState<Array<{ type: string; name: string; description?: string }>>([]);
+  const [picked, setPicked] = useState<TemplateType | null>(null);
+  const [pickedName, setPickedName] = useState<string | null>(null);
+
+  useEffect(() => {
+    listTemplates()
+      .then((items) => {
+        const list = items as Array<{ type: string; name: string; description?: string }>;
+        setCatalog(list);
+        if (!query) return;
+        const q = query.toLowerCase();
+        let best: { type: string; score: number } | null = null;
+        for (const item of list) {
+          const haystack = `${item.name} ${item.description ?? ""}`.toLowerCase();
+          let score = 0;
+          for (const word of q.split(/[\s,，。.;；]+/).filter(Boolean)) {
+            if (haystack.includes(word) || haystack.includes(word.slice(0, Math.min(4, word.length)))) {
+              score += 2;
+            }
+          }
+          if (item.type === detectIntent(query)) score += 3; // 内置意图保底
+          if (!best || score > best.score) best = { type: item.type, score };
+        }
+        if (best) {
+          const match = list.find((item) => item.type === best!.type);
+          setPicked((match?.type ?? null) as TemplateType | null);
+          setPickedName(match?.name ?? null);
+        }
+      })
+      .catch(() => {
+        // catalog optional — fallback to regex intent only
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  return { catalog, picked, pickedName };
+}
+
 let messageId = 0;
 const nextId = () => ++messageId;
 
@@ -67,6 +110,16 @@ export function LaunchFlowPage(props: {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
+  const smart = useSmartAgentPick(props.initialQuery);
+
+  // 智能匹配置顶:若定制智能体胜出,覆盖正则意图
+  useEffect(() => {
+    if (smart.picked) {
+      setIntent((current) => current ?? null);
+      setIntent(smart.picked as TemplateType);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [smart.picked]);
 
   const pushAssistant = useCallback((text: string, choices: string[] | undefined, kind: StepKind, multi = false) => {
     setMessages((current) => [...current, { id: nextId(), role: "assistant", text, choices, step: kind, multi }]);
@@ -243,7 +296,9 @@ export function LaunchFlowPage(props: {
             <div className="flex gap-2.5 items-start">
               <span className="chat-avatar" aria-hidden="true">🤖</span>
               <Card className="p-4 max-w-[85%] grid gap-3">
-                <Badge variant="default">{t(`templates.names.${intent}`)}</Badge>
+                <Badge variant="default">
+                  {smart.pickedName ?? (intent ? t(`templates.names.${intent}`) : intent)}
+                </Badge>
                 <div className="flex flex-wrap gap-1.5">
                   {summaryChips.map((chip) => (
                     <span

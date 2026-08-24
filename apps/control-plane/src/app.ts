@@ -13,12 +13,15 @@ import {
 } from "@neuroclaw/agent-core";
 import {
   approvalDecisionSchema,
+  createAgentInputSchema,
+  agentStatusSchema,
   createRunInputSchema,
   createWorkspaceInputSchema,
   templateTypeSchema,
   templateInputPayloadSchema,
   updateMemoryInputSchema
 } from "@neuroclaw/shared";
+import { isMcpAvailable, getMcpRegistry } from "@neuroclaw/tooling-mcp";
 import { ControlPlaneService, NotFoundError } from "./index.js";
 import { requireAuth, requirePermission } from "./middleware/auth.js";
 import { createAuditMiddleware } from "./middleware/audit.js";
@@ -80,6 +83,59 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
 
   api.get("/templates", requirePermission("template:read"), (c) => {
     return c.json(service.listTemplates());
+  });
+
+  // -----------------------------------------------------------------------
+  // Custom agents (J2) + MCP capability square
+  // -----------------------------------------------------------------------
+
+  api.post(
+    "/agents",
+    requirePermission("agent:create"),
+    zodValidator("json", createAgentInputSchema),
+    async (c) => {
+      try {
+        const agent = await service.createAgent(c.req.valid("json"));
+        return c.json(agent, 201);
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  api.get("/agents", requirePermission("template:read"), async (c) => {
+    return c.json(await service.listAgents());
+  });
+
+  api.patch(
+    "/agents/:agentId/status",
+    requirePermission("agent:create"),
+    zodValidator("json", z.object({ status: agentStatusSchema })),
+    async (c) => {
+      try {
+        await service.updateAgentStatus(c.req.param("agentId"), c.req.valid("json").status);
+        return c.json({ ok: true });
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  api.get("/mcp/status", requirePermission("template:read"), (c) => {
+    const available = isMcpAvailable();
+    if (!available) {
+      return c.json({ available: false, servers: [], tools: [] });
+    }
+    const registry = getMcpRegistry();
+    return c.json({
+      available: true,
+      servers: registry.getStatuses(),
+      tools: registry.listAllTools().map(({ connection, tool }) => ({
+        connection,
+        name: tool.name,
+        description: tool.description
+      }))
+    });
   });
 
   api.post(
@@ -199,8 +255,41 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
           data: JSON.stringify({ aiEnabled: isAiAvailable(), templateType })
         });
 
+        // Custom agents — persona-driven structured generation over SSE
+        if (!["content_acquisition", "private_conversion", "weekly_review"].includes(templateType)) {
+          const definition = service.registry.get(templateType);
+          try {
+            const { generateStructuredForAgent } = await import("@neuroclaw/agent-core");
+            const result = definition?.persona
+              ? await generateStructuredForAgent({
+                  persona: definition.persona,
+                  instruction: `Live preview for ${definition.name}.`,
+                  fields: definition.outputContract.fields,
+                  input
+                })
+              : { notice: `Preview for ${templateType} is generated inside the run pipeline.` };
+
+            await stream.writeSSE({
+              event: "partial",
+              data: JSON.stringify({ ...(result as Record<string, unknown>), _mock: !isAiAvailable() })
+            });
+          } catch (streamError) {
+            await stream.writeSSE({
+              event: "error",
+              data: JSON.stringify({
+                message: streamError instanceof Error ? streamError.message : String(streamError)
+              })
+            });
+          }
+          await stream.writeSSE({ event: "done", data: "{}" });
+          return;
+        }
+
         try {
-          const { result, isMock } = await streamGenerate(templateType, input);
+          const { result, isMock } = await streamGenerate(
+            templateType as "content_acquisition" | "private_conversion" | "weekly_review",
+            input
+          );
 
           await stream.writeSSE({
             event: "partial",

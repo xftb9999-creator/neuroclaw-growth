@@ -31,13 +31,17 @@ function action(
   };
 }
 
-const templateCatalog: Record<TemplateType, Template> = {
+const templateCatalog: Record<string, Template> = {
   content_acquisition: {
     id: "tpl_content_acquisition_v1",
     type: "content_acquisition",
     name: "Content Acquisition",
     version: "2.0.0",
     status: "active",
+    description:
+      "Produces ready-to-publish growth content angles with channel fit and hashtag suggestions.",
+    persona:
+      "You are a senior growth content strategist for SMBs. You write platform-native, high-hook content ideas grounded in the business context and audience provided.",
     inputContract: {
       fields: [
         { name: "businessSummary", type: "string", required: true, description: "Business context" },
@@ -64,6 +68,10 @@ const templateCatalog: Record<TemplateType, Template> = {
     name: "Private Conversion",
     version: "2.0.0",
     status: "active",
+    description:
+      "Drafts high-touch private-domain conversion messages with a mandatory human approval gate before send.",
+    persona:
+      "You are a world-class private-domain conversion copywriter. You write short, personalized, high-trust messages that respect the reader and drive a single clear next action.",
     inputContract: {
       fields: [
         { name: "businessSummary", type: "string", required: true, description: "Offer context" },
@@ -96,6 +104,10 @@ const templateCatalog: Record<TemplateType, Template> = {
     name: "Weekly Review",
     version: "2.0.0",
     status: "active",
+    description:
+      "Turns a metrics window into a structured review with prioritized next actions.",
+    persona:
+      "You are a pragmatic growth analyst for SMBs. You turn noisy signals into a concise weekly narrative and a short, high-leverage action list.",
     inputContract: {
       fields: [
         { name: "businessSummary", type: "string", required: true, description: "Business context" },
@@ -119,32 +131,85 @@ const templateCatalog: Record<TemplateType, Template> = {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Instance registry — builtin catalog + runtime registration for custom agents
+// ---------------------------------------------------------------------------
+
+export interface TemplateRegistry {
+  list(): Template[];
+  get(type: string): Template | undefined;
+  register(definition: Template): void;
+  unregister(type: string): void;
+  validateInput(type: string, input: TemplateInputPayload): void;
+  formatOutput(type: string, partial: TemplateOutputPayload): TemplateOutputPayload;
+}
+
+export function createTemplateRegistry(initial: Template[] = []): TemplateRegistry {
+  const definitions = new Map<string, Template>();
+  for (const definition of initial) {
+    definitions.set(definition.type, definition);
+  }
+
+  return {
+    list() {
+      return [...definitions.values()];
+    },
+    get(type) {
+      return definitions.get(type);
+    },
+    register(definition) {
+      definitions.set(definition.type, definition);
+    },
+    unregister(type) {
+      definitions.delete(type);
+    },
+    validateInput(type, input) {
+      const template = definitions.get(type);
+      if (!template) throw new Error(`Unsupported template type: ${type}`);
+      validateTemplateInputContract(input, template.inputContract);
+    },
+    formatOutput(type, partial) {
+      const template = definitions.get(type);
+      if (!template) throw new Error(`Unsupported template type: ${type}`);
+      for (const field of template.outputContract.fields) {
+        if (field.required && partial[field.name] === undefined) {
+          throw new Error(`Template output requires ${field.name}`);
+        }
+      }
+      return partial;
+    }
+  };
+}
+
+const builtinRegistry = createTemplateRegistry(Object.values(templateCatalog));
+
+/** 全局合并注册表:内置 + 自定义智能体。RuntimeWorker 默认使用它。 */
+export const globalRegistry = createTemplateRegistry(Object.values(templateCatalog));
+
+export { builtinRegistry };
+
+export const builtinTemplateTypes = Object.freeze(Object.keys(templateCatalog));
+
 export function listTemplates(): Template[] {
-  return Object.values(templateCatalog);
+  return builtinRegistry.list();
 }
 
 export function getTemplateByType(type: TemplateType): Template {
-  return templateCatalog[type];
+  const template = builtinRegistry.get(type);
+  if (!template) throw new Error(`Unsupported template type: ${type}`);
+  return template;
 }
 
 export function validateTemplateInput(
   type: TemplateType,
   input: TemplateInputPayload
 ): void {
-  validateTemplateInputContract(input, templateCatalog[type].inputContract);
+  builtinRegistry.validateInput(type, input);
 }
 
 export function formatTemplateOutput(
   type: TemplateType,
   partial: TemplateOutputPayload
 ): TemplateOutputPayload {
-  const template = getTemplateByType(type);
-
-  for (const field of template.outputContract.fields) {
-    if (field.required && partial[field.name] === undefined) {
-      throw new Error(`Template output requires ${field.name}`);
-    }
-  }
-
-  return partial;
+  return builtinRegistry.formatOutput(type, partial);
 }

@@ -4,7 +4,16 @@ import { sql } from "drizzle-orm";
 
 import * as schema from "./schema.js";
 
-export { workspaces, runs, approvalRequests, memoryRecords, auditEvents, jobs, jobAttempts } from "./schema.js";
+export {
+  workspaces,
+  runs,
+  approvalRequests,
+  memoryRecords,
+  auditEvents,
+  jobs,
+  jobAttempts,
+  agents
+} from "./schema.js";
 
 export interface CreateDbOptions {
   url?: string;
@@ -90,6 +99,19 @@ const DDL_STATEMENTS = [
     error TEXT,
     started_at TEXT NOT NULL,
     completed_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    base_engine TEXT NOT NULL,
+    persona TEXT NOT NULL,
+    description TEXT,
+    focus_areas TEXT,
+    output_style TEXT NOT NULL DEFAULT 'structured',
+    tool_names TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL
   )`
 ];
 

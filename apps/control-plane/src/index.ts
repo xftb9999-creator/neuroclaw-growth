@@ -7,6 +7,7 @@ import {
   workspaces,
   runs,
   approvalRequests,
+  agents,
   type Database
 } from "@neuroclaw/db";
 import {
@@ -29,9 +30,14 @@ import {
   type TemplateInputPayload,
   type TemplateOutputPayload,
   type Workspace,
-  type WorkspacePlan
+  type WorkspacePlan,
+  type CreateAgentInput
 } from "@neuroclaw/shared";
-import { listTemplates } from "@neuroclaw/templates";
+import {
+  builtinRegistry,
+  globalRegistry,
+  listTemplates as listBuiltinTemplates
+} from "@neuroclaw/templates";
 import { TemporalWorkerSkeleton } from "@neuroclaw/temporal-worker";
 
 export interface CreateWorkspaceInput {
@@ -113,6 +119,8 @@ export class ControlPlaneService {
   private readonly memoryStore: MemoryStore;
   private readonly traceLog: TraceLog;
   private readonly temporalWorker: TemporalWorkerSkeleton;
+  /** 合并注册表:内置三员工 + 数据库自定义智能体(全局单例,RuntimeWorker 共享) */
+  readonly registry = globalRegistry;
 
   private constructor(
     temporalWorker: TemporalWorkerSkeleton,
@@ -133,8 +141,113 @@ export class ControlPlaneService {
     traceLog?: TraceLog
   ): Promise<ControlPlaneService> {
     const database = db ?? await createInMemoryDb();
-    const worker = temporalWorker ?? new TemporalWorkerSkeleton(database);
-    return new ControlPlaneService(worker, database, memoryStore, traceLog);
+
+    // Load custom agents into the merged registry BEFORE the worker boots.
+    const service = new ControlPlaneService(
+      temporalWorker ?? new TemporalWorkerSkeleton(database),
+      database,
+      memoryStore,
+      traceLog
+    );
+    await service.loadCustomAgents();
+    return service;
+  }
+
+  /** 从 agents 表加载自定义智能体并注册进全局合并注册表 */
+  async loadCustomAgents(): Promise<number> {
+    const rows = await this.db.select().from(agents);
+    for (const row of rows) {
+      if (row.status === "inactive") continue;
+      globalRegistry.register(this.agentRowToTemplate(row));
+    }
+    return rows.length;
+  }
+
+  private agentRowToTemplate(row: typeof agents.$inferSelect): Template {
+    const base = builtinRegistry.get(row.baseEngine);
+    let focusAreas: string[] = [];
+    try {
+      focusAreas = row.focusAreas ? (JSON.parse(row.focusAreas) as string[]) : [];
+    } catch {
+      focusAreas = [];
+    }
+    const description = [row.description ?? "", focusAreas.length ? `Focus: ${focusAreas.join(", ")}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+
+    return {
+      ...(base ?? listBuiltinTemplates()[0]),
+      id: `agt_${row.slug}`,
+      type: row.slug,
+      name: row.name,
+      version: "1.0.0",
+      status: row.status === "inactive" ? "inactive" : "active",
+      description,
+      persona: row.persona,
+      baseEngine: row.baseEngine
+    };
+  }
+
+  async createAgent(input: CreateAgentInput): Promise<Template> {
+    const existing = await this.db.select().from(agents).where(eq(agents.slug, input.slug));
+    if (existing.length > 0) {
+      throw new Error(`Agent slug already exists: ${input.slug}`);
+    }
+
+    const row = {
+      id: `agent_${randomUUID()}`,
+      slug: input.slug,
+      name: input.name,
+      baseEngine: input.baseEngine,
+      persona: input.persona,
+      description: input.description ?? null,
+      focusAreas: JSON.stringify(input.focusAreas ?? []),
+      outputStyle: input.outputStyle ?? "structured",
+      toolNames: JSON.stringify(input.toolNames ?? []),
+      status: "active" as const,
+      createdAt: new Date().toISOString()
+    };
+
+    await this.db.insert(agents).values(row);
+
+    const template = this.agentRowToTemplate(row);
+    globalRegistry.register(template);
+
+    this.traceLog.record({
+      scope: "control-plane",
+      action: "create_agent",
+      metadata: { slug: input.slug }
+    });
+    return template;
+  }
+
+  async listAgents() {
+    const rows = await this.db.select().from(agents).orderBy(sql`rowid DESC`);
+    return rows.map((row) => ({
+      id: row.id,
+      slug: row.slug,
+      name: row.name,
+      baseEngine: row.baseEngine,
+      persona: row.persona,
+      description: row.description ?? "",
+      outputStyle: row.outputStyle,
+      status: row.status,
+      createdAt: row.createdAt
+    }));
+  }
+
+  async updateAgentStatus(agentId: string, status: "active" | "inactive"): Promise<void> {
+    const rows = await this.db.select().from(agents).where(eq(agents.id, agentId));
+    if (rows.length === 0) {
+      throw new NotFoundError(`Agent not found: ${agentId}`);
+    }
+    const row = rows[0];
+    await this.db.update(agents).set({ status }).where(eq(agents.id, agentId));
+    if (status === "inactive") {
+      globalRegistry.unregister(row.slug);
+    } else {
+      globalRegistry.register(this.agentRowToTemplate({ ...row, status }));
+    }
   }
 
   /**
@@ -192,7 +305,7 @@ export class ControlPlaneService {
   }
 
   listTemplates(): Template[] {
-    return listTemplates();
+    return this.registry.list();
   }
 
   async createRun(input: CreateRunInput): Promise<Run> {

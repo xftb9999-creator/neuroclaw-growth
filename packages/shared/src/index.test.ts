@@ -30,13 +30,15 @@ function makeRun(): Run {
 }
 
 describe("shared contracts", () => {
-  it("allows only the P0 template types", () => {
+  it("accepts builtin and custom agent slugs, rejects empty", () => {
+    // J2: 类型层放宽为任意非空 slug(注册表负责存在性校验)
     expect(assertTemplateType("content_acquisition")).toBe(
       "content_acquisition"
     );
-    expect(() => assertTemplateType("crew_ops")).toThrow(
-      /Unsupported template type/
+    expect(assertTemplateType("custom_seeding_pro")).toBe(
+      "custom_seeding_pro"
     );
+    expect(() => assertTemplateType("")).toThrow(/Unsupported template type/);
   });
 
   it("validates template contracts", () => {

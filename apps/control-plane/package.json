@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@neuroclaw/agent-core": "*"
+    "@neuroclaw/agent-core": "*",
+    "@neuroclaw/tooling-mcp": "*"
   }
 }

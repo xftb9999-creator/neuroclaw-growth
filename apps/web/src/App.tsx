@@ -1,6 +1,8 @@
 import { startTransition, useEffect, useState } from "react";
 import { cloneRun } from "./lib/api.js";
 import { clearRunDraft, clearWorkspaceId, navigate, parseRoute, readWorkspaceId, writeRunDraft, writeWorkspaceId } from "./lib/router.js";
+import { AgentBuilderPage } from "./pages/AgentBuilderPage.js";
+import { AgentsSquarePage } from "./pages/AgentsSquarePage.js";
 import { BrandProfilePage } from "./pages/BrandProfilePage.js";
 import { HistoryPage } from "./pages/HistoryPage.js";
 import { HomePage } from "./pages/HomePage.js";
@@ -50,6 +52,10 @@ export function App() {
     );
   if (route.name === "templates")
     return <TemplatePickerPage onSelect={(t) => go(`/runs/new/${t}`)} />;
+  if (route.name === "agents")
+    return <AgentsSquarePage />;
+  if (route.name === "agent-new")
+    return <AgentBuilderPage onCreated={() => go("/agents")} />;
   if (route.name === "profile")
     return <BrandProfilePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
   if (route.name === "history")

@@ -21,8 +21,15 @@ export const templateTypes = [
   "weekly_review"
 ] as const;
 
-export const templateTypeSchema = z.enum(templateTypes);
-export type TemplateType = z.infer<typeof templateTypeSchema>;
+export type BuiltinTemplateType = (typeof templateTypes)[number];
+
+/**
+ * 智能体类型:内置三员工之外,允许自定义 slug(数据驱动的 AgentDefinition)。
+ * 保留字面量联合以获得自动补全,同时接受任意 string。
+ */
+export type TemplateType = BuiltinTemplateType | (string & {});
+
+export const templateTypeSchema = z.string();
 
 export const templateStatusSchema = z.enum(["active", "inactive"]);
 export type TemplateStatus = z.infer<typeof templateStatusSchema>;
@@ -77,16 +84,40 @@ export type ApprovalRule = z.infer<typeof approvalRuleSchema>;
 
 export const templateSchema = z.object({
   id: z.string(),
-  type: templateTypeSchema,
+  type: z.string(),
   name: z.string(),
   version: z.string(),
   status: templateStatusSchema,
+  description: z.string().optional(),
+  persona: z.string().optional(),
+  baseEngine: z.string().optional(),
   inputContract: templateInputContractSchema,
   outputContract: templateOutputContractSchema,
   requiresApprovalRules: z.array(approvalRuleSchema),
   supportedActions: z.array(templateActionSchema)
 });
 export type Template = z.infer<typeof templateSchema>;
+
+// ---------------------------------------------------------------------------
+// Custom agents — 数据驱动的智能体定义(J2)
+// ---------------------------------------------------------------------------
+
+export const agentStatusSchema = z.enum(["active", "inactive"]);
+
+export const createAgentInputSchema = z.object({
+  slug: z
+    .string()
+    .min(2, "slug is required")
+    .regex(/^[a-z][a-z0-9_]*$/, "slug must be lowercase snake_case"),
+  name: z.string().min(1, "name is required"),
+  baseEngine: z.enum(templateTypes),
+  persona: z.string().min(4, "persona is required"),
+  description: z.string().optional(),
+  focusAreas: z.array(z.string()).default([]),
+  outputStyle: z.enum(["structured", "checklist", "copy"]).default("structured"),
+  toolNames: z.array(z.string()).default([])
+});
+export type CreateAgentInput = z.infer<typeof createAgentInputSchema>;
 
 export const runStatuses = [
   "draft",
@@ -233,8 +264,8 @@ const allowedTransitions: Record<RunStatus, readonly RunStatus[]> = {
   cancelled: []
 };
 
-export function isTemplateType(value: string): value is TemplateType {
-  return templateTypes.includes(value as TemplateType);
+export function isTemplateType(value: string): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 export function assertTemplateType(value: string): TemplateType {
@@ -377,7 +408,8 @@ export const rolePermissions: Record<Role, readonly string[]> = {
     "memory:read",
     "memory:write",
     "memory:delete",
-    "template:read"
+    "template:read",
+    "agent:create"
   ],
   operator: [
     "workspace:read",
@@ -387,7 +419,8 @@ export const rolePermissions: Record<Role, readonly string[]> = {
     "memory:read",
     "memory:write",
     "memory:delete",
-    "template:read"
+    "template:read",
+    "agent:create"
   ],
   viewer: [
     "workspace:read",
