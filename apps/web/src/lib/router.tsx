@@ -9,6 +9,9 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/launch") return { name: "launch" };
   if (pathname === "/agents") return { name: "agents" };
   if (pathname === "/agents/new") return { name: "agent-new" };
+  if (pathname === "/library") return { name: "library" };
+  if (pathname === "/knowledge") return { name: "knowledge" };
+  if (pathname === "/team") return { name: "team" };
   if (pathname === "/history") return { name: "history" };
   if (pathname === "/memory") return { name: "memory" };
 

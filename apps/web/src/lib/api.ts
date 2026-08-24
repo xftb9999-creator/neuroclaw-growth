@@ -155,3 +155,54 @@ export interface McpStatusResponse {
 export function fetchMcpStatus() {
   return request<McpStatusResponse>("/api/mcp/status");
 }
+
+// ---------------------------------------------------------------------------
+// Artifacts library + Knowledge base (J3)
+// ---------------------------------------------------------------------------
+
+export interface ArtifactRecord {
+  id: string;
+  workspaceId: string;
+  runId: string;
+  agentType: string;
+  kind: "note" | "copy" | "report" | "generic";
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export function listArtifacts(workspaceId: string) {
+  return request(`/api/workspaces/${workspaceId}/artifacts`);
+}
+
+export function deleteArtifact(artifactId: string) {
+  return request(`/api/artifacts/${artifactId}`, { method: "DELETE" });
+}
+
+export interface KnowledgeRecord {
+  id: string;
+  workspaceId: string;
+  title: string;
+  content: string;
+  tags: string[];
+  source: string;
+  createdAt: string;
+}
+
+export function createKnowledgeEntry(payload: {
+  workspaceId: string;
+  title: string;
+  content: string;
+  tags?: string[];
+}) {
+  return request("/api/knowledge", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function listKnowledgeEntries(workspaceId: string) {
+  return request(`/api/workspaces/${workspaceId}/knowledge`);
+}
+
+export function deleteKnowledgeEntry(entryId: string) {
+  return request(`/api/knowledge/${entryId}`, { method: "DELETE" });
+}

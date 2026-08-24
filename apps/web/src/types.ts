@@ -74,6 +74,9 @@ export type Route =
   | { name: "launch"; query?: string }
   | { name: "agents" }
   | { name: "agent-new" }
+  | { name: "library" }
+  | { name: "knowledge" }
+  | { name: "team" }
   | { name: "history" }
   | { name: "memory" }
   | { name: "run-setup"; templateType: TemplateType }

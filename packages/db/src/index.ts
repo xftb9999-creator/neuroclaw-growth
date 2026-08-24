@@ -12,7 +12,9 @@ export {
   auditEvents,
   jobs,
   jobAttempts,
-  agents
+  agents,
+  artifacts,
+  knowledgeEntries
 } from "./schema.js";
 
 export interface CreateDbOptions {
@@ -111,6 +113,26 @@ const DDL_STATEMENTS = [
     output_style TEXT NOT NULL DEFAULT 'structured',
     tool_names TEXT,
     status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    agent_type TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT,
+    content_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_entries (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
     created_at TEXT NOT NULL
   )`
 ];

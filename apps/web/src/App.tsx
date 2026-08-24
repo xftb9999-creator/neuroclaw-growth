@@ -6,8 +6,11 @@ import { AgentsSquarePage } from "./pages/AgentsSquarePage.js";
 import { BrandProfilePage } from "./pages/BrandProfilePage.js";
 import { HistoryPage } from "./pages/HistoryPage.js";
 import { HomePage } from "./pages/HomePage.js";
+import { KnowledgePage } from "./pages/KnowledgePage.js";
 import { LaunchFlowPage } from "./pages/LaunchFlowPage.js";
+import { LibraryPage } from "./pages/LibraryPage.js";
 import { MemoryPage } from "./pages/MemoryPage.js";
+import { TeamPage } from "./pages/TeamPage.js";
 import { OnboardingPage } from "./pages/OnboardingPage.js";
 import { ResultDetailPage } from "./pages/ResultDetailPage.js";
 import { RunSetupPage } from "./pages/RunSetupPage.js";
@@ -56,6 +59,12 @@ export function App() {
     return <AgentsSquarePage />;
   if (route.name === "agent-new")
     return <AgentBuilderPage onCreated={() => go("/agents")} />;
+  if (route.name === "library")
+    return <LibraryPage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
+  if (route.name === "knowledge")
+    return <KnowledgePage workspaceId={workspaceId} />;
+  if (route.name === "team")
+    return <TeamPage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
   if (route.name === "profile")
     return <BrandProfilePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
   if (route.name === "history")

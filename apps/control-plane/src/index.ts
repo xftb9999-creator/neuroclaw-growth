@@ -8,6 +8,8 @@ import {
   runs,
   approvalRequests,
   agents,
+  artifacts,
+  knowledgeEntries,
   type Database
 } from "@neuroclaw/db";
 import {
@@ -327,7 +329,7 @@ export class ControlPlaneService {
       const templateType = assertTemplateType(input.templateType);
       const runInput = assertRunInput(input.input);
       const now = new Date().toISOString();
-      const run: Run = {
+      let run: Run = {
         id: `run_${randomUUID()}`,
         workspaceId: input.workspaceId,
         templateType,
@@ -338,6 +340,7 @@ export class ControlPlaneService {
         createdAt: now,
         updatedAt: now
       };
+      run = await this.attachKnowledge(run);
 
       const result = await this.temporalWorker.submitQueuedRun(run);
       await this.db.insert(runs).values(runToInsert(result.run));
@@ -359,6 +362,7 @@ export class ControlPlaneService {
           `Completed ${result.run.templateType} with reusable output`,
           "successful_output"
         );
+        await this.saveArtifact(result.run);
       }
 
       span.setAttribute("runId", result.run.id);
@@ -479,6 +483,7 @@ export class ControlPlaneService {
           `Completed ${resumed.run.templateType} after approval`,
           "successful_output"
         );
+        await this.saveArtifact(resumed.run);
       }
 
       span.setAttribute("result.status", resumed.run.status);
@@ -525,6 +530,132 @@ export class ControlPlaneService {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Artifacts library (J3) — completed runs deposit reusable deliverables
+  // -------------------------------------------------------------------------
+
+  async saveArtifact(run: Run): Promise<string> {
+    const kind =
+      run.templateType === "content_acquisition"
+        ? "note"
+        : run.templateType === "private_conversion"
+          ? "copy"
+          : run.templateType === "weekly_review"
+            ? "report"
+            : "generic";
+
+    const payload = run.outputPayload ?? {};
+    const firstString = Object.values(payload).find((value) => typeof value === "string") as
+      | string
+      | undefined;
+    const firstList = Object.values(payload).find((value) => Array.isArray(value)) as
+      | string[]
+      | undefined;
+
+    const title = (firstString ?? (firstList?.[0] ?? `${run.templateType} output`)).slice(0, 90);
+    const summary = (firstList ?? []).slice(0, 3).join(" / ").slice(0, 160) || title.slice(0, 120);
+
+    const id = `art_${randomUUID()}`;
+    await this.db.insert(artifacts).values({
+      id,
+      workspaceId: run.workspaceId,
+      runId: run.id,
+      agentType: run.templateType,
+      kind,
+      title,
+      summary,
+      contentJson: JSON.stringify(payload),
+      createdAt: new Date().toISOString()
+    });
+    return id;
+  }
+
+  async listArtifacts(workspaceId: string) {
+    await this.assertWorkspaceExists(workspaceId);
+    const rows = await this.db
+      .select()
+      .from(artifacts)
+      .where(eq(artifacts.workspaceId, workspaceId))
+      .orderBy(sql`rowid DESC`);
+    return rows.map((row) => ({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      runId: row.runId,
+      agentType: row.agentType,
+      kind: row.kind,
+      title: row.title,
+      summary: row.summary ?? "",
+      payload: JSON.parse(row.contentJson) as Record<string, unknown>,
+      createdAt: row.createdAt
+    }));
+  }
+
+  async deleteArtifact(artifactId: string): Promise<void> {
+    await this.db.delete(artifacts).where(eq(artifacts.id, artifactId));
+  }
+
+  // -------------------------------------------------------------------------
+  // Knowledge base (J3) — brand facts injected into agent prompts
+  // -------------------------------------------------------------------------
+
+  async createKnowledgeEntry(input: {
+    workspaceId: string;
+    title: string;
+    content: string;
+    tags?: string[];
+  }) {
+    const id = `kn_${randomUUID()}`;
+    await this.db.insert(knowledgeEntries).values({
+      id,
+      workspaceId: input.workspaceId,
+      title: input.title,
+      content: input.content,
+      tags: JSON.stringify(input.tags ?? []),
+      source: "manual",
+      createdAt: new Date().toISOString()
+    });
+    return { id };
+  }
+
+  async listKnowledgeEntries(workspaceId: string) {
+    const rows = await this.db
+      .select()
+      .from(knowledgeEntries)
+      .where(eq(knowledgeEntries.workspaceId, workspaceId))
+      .orderBy(sql`rowid DESC`);
+    return rows.map((row) => ({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      title: row.title,
+      content: row.content,
+      tags: (() => {
+        try {
+          return row.tags ? (JSON.parse(row.tags) as string[]) : [];
+        } catch {
+          return [];
+        }
+      })(),
+      source: row.source,
+      createdAt: row.createdAt
+    }));
+  }
+
+  async deleteKnowledgeEntry(entryId: string): Promise<void> {
+    await this.db.delete(knowledgeEntries).where(eq(knowledgeEntries.id, entryId));
+  }
+
+  /** 运行创建时解析所选知识条目,注入 _knowledge 供 persona 提示词使用 */
+  private async attachKnowledge(run: Run): Promise<Run> {
+    const ids = (run.input as { _knowledgeIds?: unknown })._knowledgeIds;
+    if (!Array.isArray(ids) || ids.length === 0) return run;
+    const entries = await this.db.select().from(knowledgeEntries);
+    const selected = entries.filter((entry) => ids.includes(entry.id));
+    const input = { ...run.input };
+    delete (input as { _knowledgeIds?: unknown })._knowledgeIds;
+    input._knowledge = selected.map((entry) => ({ title: entry.title, content: entry.content }));
+    return { ...run, input };
   }
 
   private async assertWorkspaceExists(workspaceId: string): Promise<void> {

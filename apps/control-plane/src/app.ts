@@ -138,6 +138,56 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
     });
   });
 
+  // -----------------------------------------------------------------------
+  // Artifacts library + Knowledge base (J3)
+  // -----------------------------------------------------------------------
+
+  api.get(
+    "/workspaces/:workspaceId/artifacts",
+    requirePermission("run:read"),
+    async (c) => {
+      try {
+        return c.json(await service.listArtifacts(c.req.param("workspaceId")));
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  api.delete("/artifacts/:artifactId", requirePermission("memory:delete"), async (c) => {
+    await service.deleteArtifact(c.req.param("artifactId"));
+    return c.json({ ok: true });
+  });
+
+  const knowledgeInputSchema = z.object({
+    workspaceId: z.string().min(1),
+    title: z.string().min(1),
+    content: z.string().min(1),
+    tags: z.array(z.string()).optional()
+  });
+
+  api.post(
+    "/knowledge",
+    requirePermission("memory:write"),
+    zodValidator("json", knowledgeInputSchema),
+    async (c) => {
+      return c.json(await service.createKnowledgeEntry(c.req.valid("json")), 201);
+    }
+  );
+
+  api.get(
+    "/workspaces/:workspaceId/knowledge",
+    requirePermission("memory:read"),
+    async (c) => {
+      return c.json(await service.listKnowledgeEntries(c.req.param("workspaceId")));
+    }
+  );
+
+  api.delete("/knowledge/:entryId", requirePermission("memory:delete"), async (c) => {
+    await service.deleteKnowledgeEntry(c.req.param("entryId"));
+    return c.json({ ok: true });
+  });
+
   api.post(
     "/runs",
     requirePermission("run:create"),

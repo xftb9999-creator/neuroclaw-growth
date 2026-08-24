@@ -106,3 +106,33 @@ export const agents = sqliteTable("agents", {
   status: text("status").notNull().default("active"), // 'active' | 'inactive'
   createdAt: text("created_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Artifacts library — every completed run deposits a reusable deliverable (J3)
+// ---------------------------------------------------------------------------
+
+export const artifacts = sqliteTable("artifacts", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  runId: text("run_id").notNull(),
+  agentType: text("agent_type").notNull(),
+  kind: text("kind").notNull(), // 'note' | 'copy' | 'report' | 'generic'
+  title: text("title").notNull(),
+  summary: text("summary"),
+  contentJson: text("content_json").notNull(), // full output payload
+  createdAt: text("created_at").notNull()
+});
+
+// ---------------------------------------------------------------------------
+// Knowledge base — brand facts & playbooks injected into agent prompts (J3)
+// ---------------------------------------------------------------------------
+
+export const knowledgeEntries = sqliteTable("knowledge_entries", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  tags: text("tags"), // JSON string[]
+  source: text("source").notNull().default("manual"), // 'manual' | 'run'
+  createdAt: text("created_at").notNull()
+});
