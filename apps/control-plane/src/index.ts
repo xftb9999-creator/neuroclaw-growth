@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql, lte } from "drizzle-orm";
 
 import {
   closeDatabase,
@@ -10,6 +10,7 @@ import {
   agents,
   artifacts,
   knowledgeEntries,
+  schedules,
   type Database
 } from "@neuroclaw/db";
 import {
@@ -656,6 +657,138 @@ export class ControlPlaneService {
     delete (input as { _knowledgeIds?: unknown })._knowledgeIds;
     input._knowledge = selected.map((entry) => ({ title: entry.title, content: entry.content }));
     return { ...run, input };
+  }
+
+  // -------------------------------------------------------------------------
+  // Approval inbox (J4)
+  // -------------------------------------------------------------------------
+
+  async listPendingApprovals(workspaceId?: string) {
+    const baseQuery = this.db
+      .select({ approval: approvalRequests, run: runs })
+      .from(approvalRequests)
+      .innerJoin(runs, eq(approvalRequests.runId, runs.id));
+
+    const rows = workspaceId
+      ? await baseQuery
+          .where(and(eq(approvalRequests.status, "pending"), eq(runs.workspaceId, workspaceId)))
+          .orderBy(sql`approval_requests.rowid DESC`)
+      : await baseQuery.where(eq(approvalRequests.status, "pending")).orderBy(sql`approval_requests.rowid DESC`);
+
+    return rows.map(({ approval, run }) => ({
+      approvalId: approval.id,
+      actionType: approval.actionType,
+      reason: approval.reason,
+      requestedAt: approval.requestedAt,
+      run: {
+        id: run.id,
+        workspaceId: run.workspaceId,
+        templateType: run.templateType as Run["templateType"],
+        status: run.status as Run["status"],
+        businessSummary: (() => {
+          try {
+            const parsed = JSON.parse(run.input) as Record<string, unknown>;
+            return String(parsed.businessSummary ?? "");
+          } catch {
+            return "";
+          }
+        })()
+      }
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Schedules (J4) — recurring agent runs
+  // -------------------------------------------------------------------------
+
+  async createSchedule(input: {
+    workspaceId: string;
+    templateType: string;
+    label: string;
+    inputPayload: Record<string, unknown>;
+    intervalMinutes: number;
+  }) {
+    const id = `sch_${randomUUID()}`;
+    const now = Date.now();
+    await this.db.insert(schedules).values({
+      id,
+      workspaceId: input.workspaceId,
+      templateType: input.templateType,
+      label: input.label,
+      inputJson: JSON.stringify(input.inputPayload),
+      intervalMinutes: Math.max(5, input.intervalMinutes),
+      nextRunAt: new Date(now + Math.max(5, input.intervalMinutes) * 60_000).toISOString(),
+      status: "active",
+      createdAt: new Date(now).toISOString()
+    });
+    return { id };
+  }
+
+  async listSchedules(workspaceId?: string) {
+    const rows = workspaceId
+      ? await this.db.select().from(schedules).where(eq(schedules.workspaceId, workspaceId)).orderBy(sql`rowid DESC`)
+      : await this.db.select().from(schedules).orderBy(sql`rowid DESC`);
+    return rows.map((row) => ({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      templateType: row.templateType,
+      label: row.label,
+      intervalMinutes: row.intervalMinutes,
+      nextRunAt: row.nextRunAt,
+      lastRunId: row.lastRunId ?? undefined,
+      lastStatus: row.lastStatus ?? undefined,
+      status: row.status
+    }));
+  }
+
+  async deleteSchedule(scheduleId: string): Promise<void> {
+    await this.db.delete(schedules).where(eq(schedules.id, scheduleId));
+  }
+
+  /** 由 startServer 的定时器驱动:到期调度 → 创建运行 */
+  async processDueSchedules(): Promise<number> {
+    const now = new Date().toISOString();
+    const due = await this.db
+      .select()
+      .from(schedules)
+      .where(and(eq(schedules.status, "active"), lte(schedules.nextRunAt, now)));
+
+    let launched = 0;
+    for (const schedule of due) {
+      try {
+        const run = await this.createRun({
+          workspaceId: schedule.workspaceId,
+          templateType: schedule.templateType,
+          input: JSON.parse(schedule.inputJson) as Record<string, unknown>
+        });
+        launched += 1;
+        await this.db
+          .update(schedules)
+          .set({
+            lastRunId: run.id,
+            lastStatus: "ok",
+            nextRunAt: new Date(Date.now() + schedule.intervalMinutes * 60_000).toISOString()
+          })
+          .where(eq(schedules.id, schedule.id));
+      } catch (scheduleError) {
+        this.traceLog.record({
+          scope: "control-plane",
+          action: "schedule_failed",
+          metadata: {
+            scheduleId: schedule.id,
+            error: scheduleError instanceof Error ? scheduleError.message : String(scheduleError)
+          }
+        });
+        await this.db
+          .update(schedules)
+          .set({
+            lastStatus: "failed",
+            nextRunAt: new Date(Date.now() + schedule.intervalMinutes * 60_000).toISOString()
+          })
+          .where(eq(schedules.id, schedule.id));
+      }
+    }
+    return launched;
   }
 
   private async assertWorkspaceExists(workspaceId: string): Promise<void> {

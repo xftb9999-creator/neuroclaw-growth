@@ -206,3 +206,57 @@ export function listKnowledgeEntries(workspaceId: string) {
 export function deleteKnowledgeEntry(entryId: string) {
   return request(`/api/knowledge/${entryId}`, { method: "DELETE" });
 }
+
+// ---------------------------------------------------------------------------
+// Approval inbox + Schedules (J4)
+// ---------------------------------------------------------------------------
+
+export interface PendingApproval {
+  approvalId: string;
+  actionType: string;
+  reason: string;
+  requestedAt: string;
+  run: {
+    id: string;
+    workspaceId: string;
+    templateType: string;
+    status: string;
+    businessSummary: string;
+  };
+}
+
+export function listPendingApprovals(workspaceId?: string) {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return request(`/api/approvals/pending${query}`);
+}
+
+export interface ScheduleRecord {
+  id: string;
+  workspaceId: string;
+  templateType: string;
+  label: string;
+  intervalMinutes: number;
+  nextRunAt: string;
+  lastRunId?: string;
+  lastStatus?: string;
+  status: string;
+}
+
+export function createSchedule(payload: {
+  workspaceId: string;
+  templateType: string;
+  label: string;
+  inputPayload: Record<string, unknown>;
+  intervalMinutes: number;
+}) {
+  return request("/api/schedules", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function listSchedules(workspaceId?: string) {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return request(`/api/schedules${query}`);
+}
+
+export function deleteSchedule(scheduleId: string) {
+  return request(`/api/schedules/${scheduleId}`, { method: "DELETE" });
+}

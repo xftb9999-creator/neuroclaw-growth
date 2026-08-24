@@ -188,6 +188,41 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
     return c.json({ ok: true });
   });
 
+  // -----------------------------------------------------------------------
+  // Approval inbox + Schedules (J4)
+  // -----------------------------------------------------------------------
+
+  api.get("/approvals/pending", requirePermission("run:read"), async (c) => {
+    const workspaceId = c.req.query("workspaceId");
+    return c.json(await service.listPendingApprovals(workspaceId));
+  });
+
+  const scheduleInputSchema = z.object({
+    workspaceId: z.string().min(1),
+    templateType: templateTypeSchema,
+    label: z.string().min(1),
+    inputPayload: templateInputPayloadSchema,
+    intervalMinutes: z.number().int().min(5)
+  });
+
+  api.post(
+    "/schedules",
+    requirePermission("run:create"),
+    zodValidator("json", scheduleInputSchema),
+    async (c) => {
+      return c.json(await service.createSchedule(c.req.valid("json")), 201);
+    }
+  );
+
+  api.get("/schedules", requirePermission("run:read"), async (c) => {
+    return c.json(await service.listSchedules(c.req.query("workspaceId")));
+  });
+
+  api.delete("/schedules/:scheduleId", requirePermission("run:create"), async (c) => {
+    await service.deleteSchedule(c.req.param("scheduleId"));
+    return c.json({ ok: true });
+  });
+
   api.post(
     "/runs",
     requirePermission("run:create"),

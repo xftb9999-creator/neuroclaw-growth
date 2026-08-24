@@ -6,10 +6,12 @@ import { AgentsSquarePage } from "./pages/AgentsSquarePage.js";
 import { BrandProfilePage } from "./pages/BrandProfilePage.js";
 import { HistoryPage } from "./pages/HistoryPage.js";
 import { HomePage } from "./pages/HomePage.js";
+import { InboxPage } from "./pages/InboxPage.js";
 import { KnowledgePage } from "./pages/KnowledgePage.js";
 import { LaunchFlowPage } from "./pages/LaunchFlowPage.js";
 import { LibraryPage } from "./pages/LibraryPage.js";
 import { MemoryPage } from "./pages/MemoryPage.js";
+import { SchedulePage } from "./pages/SchedulePage.js";
 import { TeamPage } from "./pages/TeamPage.js";
 import { OnboardingPage } from "./pages/OnboardingPage.js";
 import { ResultDetailPage } from "./pages/ResultDetailPage.js";
@@ -65,6 +67,10 @@ export function App() {
     return <KnowledgePage workspaceId={workspaceId} />;
   if (route.name === "team")
     return <TeamPage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
+  if (route.name === "inbox")
+    return <InboxPage workspaceId={workspaceId} onOpenRun={(id) => go(`/runs/${id}`)} />;
+  if (route.name === "schedule")
+    return <SchedulePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
   if (route.name === "profile")
     return <BrandProfilePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
   if (route.name === "history")

@@ -52,6 +52,16 @@ export async function startServer(options: {
   const service = await ControlPlaneService.create();
   const app = createApp(service, staticDir);
 
+  // Scheduler tick — due recurring schedules → new runs (J4)
+  const schedulerTimer = setInterval(() => {
+    void service.processDueSchedules().catch((error) => {
+      console.warn(
+        `[scheduler] tick failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+  }, 30_000);
+  schedulerTimer.unref?.();
+
   const httpServer = serve(
     {
       fetch: app.fetch,
@@ -69,6 +79,7 @@ export async function startServer(options: {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[shutdown] Graceful shutdown initiated (${reason})...`);
+    clearInterval(schedulerTimer);
 
     // 1. Stop accepting new connections (drain in-flight requests with a timeout)
     await new Promise<void>((resolve) => {

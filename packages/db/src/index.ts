@@ -14,7 +14,8 @@ export {
   jobAttempts,
   agents,
   artifacts,
-  knowledgeEntries
+  knowledgeEntries,
+  schedules
 } from "./schema.js";
 
 export interface CreateDbOptions {
@@ -133,6 +134,19 @@ const DDL_STATEMENTS = [
     content TEXT NOT NULL,
     tags TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    template_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    interval_minutes INTEGER NOT NULL DEFAULT 1440,
+    next_run_at TEXT NOT NULL,
+    last_run_id TEXT,
+    last_status TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL
   )`
 ];

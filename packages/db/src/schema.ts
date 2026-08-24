@@ -136,3 +136,21 @@ export const knowledgeEntries = sqliteTable("knowledge_entries", {
   source: text("source").notNull().default("manual"), // 'manual' | 'run'
   createdAt: text("created_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Schedules — recurring agent runs (J4)
+// ---------------------------------------------------------------------------
+
+export const schedules = sqliteTable("schedules", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  templateType: text("template_type").notNull(),
+  label: text("label").notNull(),
+  inputJson: text("input_json").notNull(), // run input payload
+  intervalMinutes: integer("interval_minutes").notNull().default(1440),
+  nextRunAt: text("next_run_at").notNull(),
+  lastRunId: text("last_run_id"),
+  lastStatus: text("last_status"), // 'ok' | 'failed'
+  status: text("status").notNull().default("active"), // 'active' | 'paused'
+  createdAt: text("created_at").notNull()
+});

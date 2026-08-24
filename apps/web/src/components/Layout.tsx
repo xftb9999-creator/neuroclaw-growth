@@ -1,5 +1,7 @@
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
+import { listPendingApprovals } from "../lib/api.js";
+import { readWorkspaceId } from "../lib/router.js";
 import { Button } from "./ui/Button.js";
 import { Card } from "./ui/Card.js";
 import { LanguageSwitcher, useI18n } from "../lib/i18n.js";
@@ -18,6 +20,26 @@ function AuroraCanvas() {
 
 export function RouteLayout(props: { title: string; subtitle: string; children: ReactNode }) {
   const { t, embed } = useI18n();
+  const [pendingCount, setPendingCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (embed) return;
+    let cancelled = false;
+    const fetchCount = async () => {
+      try {
+        const items = (await listPendingApprovals(readWorkspaceId() ?? undefined)) as unknown[];
+        if (!cancelled) setPendingCount(items.length);
+      } catch {
+        // silent — badge is best-effort
+      }
+    };
+    void fetchCount();
+    const timer = window.setInterval(fetchCount, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [embed]);
 
   useEffect(() => {
     if (!embed) return;
@@ -81,6 +103,22 @@ export function RouteLayout(props: { title: string; subtitle: string; children: 
               </Button>
               <Button variant="ghost" onClick={() => navigate("/memory")}>
                 {t("common.nav.memory")}
+              </Button>
+              <button
+                type="button"
+                onClick={() => navigate("/inbox")}
+                className="relative inline-flex items-center gap-1.5 rounded-pill px-4 py-2 text-[14px] font-medium text-muted hover:text-ink hover:bg-surface-strong cursor-pointer bg-transparent border-0 transition-colors"
+                aria-label={t("inbox.title")}
+              >
+                🔔 {t("common.nav.inbox")}
+                {pendingCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[11px] font-bold text-white bg-danger rounded-full">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+              <Button variant="ghost" onClick={() => navigate("/schedule")}>
+                ⏰ {t("common.nav.schedule")}
               </Button>
             </nav>
 
