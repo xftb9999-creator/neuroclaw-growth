@@ -1,0 +1,43 @@
+﻿{
+    "references":  [
+                       {
+                           "path":  "./packages/shared/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/templates/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/policy/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/memory/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/observability/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/db/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/agent-core/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/operator-browser/tsconfig.json"
+                       },
+                       {
+                           "path":  "./packages/tooling-mcp/tsconfig.json"
+                       },
+                       {
+                           "path":  "./apps/runtime-worker/tsconfig.json"
+                       },
+                       {
+                           "path":  "./apps/temporal-worker/tsconfig.json"
+                       },
+                       {
+                           "path":  "./apps/control-plane/tsconfig.json"
+                       }
+                   ],
+    "files":  [
+
+              ]
+}

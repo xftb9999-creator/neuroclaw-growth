@@ -1,0 +1,15 @@
+{
+  "name": "@neuroclaw/agent-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@neuroclaw/shared": "*",
+    "ai": "^7.0.41",
+    "@ai-sdk/openai": "^4.0.23",
+    "@ai-sdk/anthropic": "^4.0.23",
+    "zod": "^4.1.5"
+  }
+}

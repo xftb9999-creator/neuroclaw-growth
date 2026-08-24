@@ -1,0 +1,54 @@
+{
+    "name": "neuroclaw-growth-p0",
+    "version": "0.2.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
+    "workspaces": [
+        "apps/*",
+        "packages/*"
+    ],
+    "scripts": {
+        "build": "tsc -b && vite build --config apps/web/vite.config.ts",
+        "dev": "turbo run dev",
+        "start": "node ./apps/control-plane/dist/server.js",
+        "test": "vitest run",
+        "test:e2e": "npm run build && playwright test",
+        "typecheck": "tsc -b --pretty false && tsc --noEmit -p apps/web/tsconfig.json"
+    },
+    "devDependencies": {
+        "@hono/node-server": "^1.14.1",
+        "@playwright/test": "^1.59.1",
+        "@types/node": "^24.6.0",
+        "@types/react": "^19.2.14",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^5.2.0",
+        "tsx": "^4.20.5",
+        "turbo": "^2.5.6",
+        "typescript": "^5.9.3",
+        "vite": "^7.3.2",
+        "vitest": "^3.2.4"
+    },
+    "dependencies": {
+        "@ai-sdk/anthropic": "^4.0.23",
+        "@ai-sdk/openai": "^4.0.23",
+        "@libsql/client": "^0.15.13",
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@opentelemetry/api": "^1.9.1",
+        "@tailwindcss/vite": "^4.3.3",
+        "ai": "^7.0.41",
+        "class-variance-authority": "^0.7.1",
+        "clsx": "^2.1.1",
+        "drizzle-orm": "^0.45.2",
+        "hono": "^4.8.5",
+        "lucide-react": "^1.27.0",
+        "playwright": "^1.62.0",
+        "react": "^19.2.4",
+        "react-dom": "^19.2.4",
+        "tailwind-merge": "^3.6.0",
+        "tailwindcss": "^4.3.3",
+        "zod": "^4.1.5"
+    }
+}

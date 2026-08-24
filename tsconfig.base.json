@@ -1,0 +1,52 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "baseUrl": ".",
+    "paths": {
+      "@neuroclaw/shared": [
+        "./packages/shared/src/index.ts"
+      ],
+      "@neuroclaw/templates": [
+        "./packages/templates/src/index.ts"
+      ],
+      "@neuroclaw/policy": [
+        "./packages/policy/src/index.ts"
+      ],
+      "@neuroclaw/memory": [
+        "./packages/memory/src/index.ts"
+      ],
+      "@neuroclaw/observability": [
+        "./packages/observability/src/index.ts"
+      ],
+      "@neuroclaw/db": [
+        "./packages/db/src/index.ts"
+      ],
+      "@neuroclaw/agent-core": [
+        "./packages/agent-core/src/index.ts"
+      ],
+      "@neuroclaw/operator-browser": [
+        "./packages/operator-browser/src/index.ts"
+      ],
+      "@neuroclaw/tooling-mcp": [
+        "./packages/tooling-mcp/src/index.ts"
+      ],
+      "@neuroclaw/runtime-worker": [
+        "./apps/runtime-worker/src/index.ts"
+      ],
+      "@neuroclaw/temporal-worker": [
+        "./apps/temporal-worker/src/index.ts"
+      ]
+    },
+    "strict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true
+  }
+}

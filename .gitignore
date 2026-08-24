@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+.vite/
+
+# Test artifacts
+test-results/
+playwright-report/
+blob-report/
+
+# Runtime data
+data/
+*.db
+*.db-journal
+*.wal
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Tooling caches
+*.tsbuildinfo
+.esbuildkit/
+.cache/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

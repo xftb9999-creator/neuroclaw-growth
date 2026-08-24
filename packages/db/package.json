@@ -1,0 +1,12 @@
+{
+  "name": "@neuroclaw/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@libsql/client": "^0.15.13",
+    "drizzle-orm": "^0.45.2"
+  }
+}

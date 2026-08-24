@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck · Test · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # Use hoisted install strategy to match Windows development setup and
+      # avoid symlink issues on case-sensitive file systems.
+      npm_config_install_strategy: hoisted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neuroclaw-p0-build
+          path: |
+            apps/*/dist
+            packages/*/dist
+            apps/web/dist
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: build
+
+    env:
+      npm_config_install_strategy: hoisted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 7

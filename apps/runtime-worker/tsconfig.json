@@ -1,0 +1,34 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../../packages/shared/tsconfig.json"
+    },
+    {
+      "path": "../../packages/templates/tsconfig.json"
+    },
+    {
+      "path": "../../packages/policy/tsconfig.json"
+    },
+    {
+      "path": "../../packages/observability/tsconfig.json"
+    },
+    {
+      "path": "../../packages/agent-core/tsconfig.json"
+    },
+    {
+      "path": "../../packages/operator-browser/tsconfig.json"
+    },
+    {
+      "path": "../../packages/tooling-mcp/tsconfig.json"
+    }
+  ]
+}

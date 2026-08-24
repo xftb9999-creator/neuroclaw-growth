@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * NeuroClaw brand theme — Tailwind v4 CSS-first config
+ * Brand color #b8512f mapped to semantic tokens
+ * ------------------------------------------------------------------------- */
+@theme {
+  --color-bg: #f5efe4;
+  --color-surface: #fffaf2;
+  --color-ink: #1f1a17;
+  --color-muted: #6f655f;
+  --color-line: #d7cabd;
+  --color-brand: #b8512f;
+  --color-brand-dark: #7e351c;
+  --color-brand-light: #ead9ca;
+  --color-ok: #256d4a;
+  --color-ok-light: #d8f0e2;
+  --color-warn: #a76714;
+  --color-warn-light: #fdebcf;
+  --color-danger: #9d3026;
+  --color-danger-light: #fde7e4;
+
+  --radius-card: 28px;
+  --radius-input: 18px;
+  --radius-pill: 999px;
+
+  --font-sans: "Segoe UI", "PingFang SC", system-ui, sans-serif;
+}
+
+/* ---------------------------------------------------------------------------
+ * Base styles
+ * ------------------------------------------------------------------------- */
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background: radial-gradient(circle at top left, #fff9f0, var(--color-bg));
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+ * Accessibility — visible focus ring for keyboard navigation
+ * ------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Skeleton loading animation
+ * ------------------------------------------------------------------------- */
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-line) 0%,
+    #e8ddcd 50%,
+    var(--color-line) 100%
+  );
+  background-size: 2000px 100%;
+  animation: shimmer 2s infinite linear;
+  border-radius: var(--radius-input);
+}
