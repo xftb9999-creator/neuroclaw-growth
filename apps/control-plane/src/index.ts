@@ -11,6 +11,7 @@ import {
   artifacts,
   knowledgeEntries,
   schedules,
+  teamRuns,
   type Database
 } from "@neuroclaw/db";
 import {
@@ -116,6 +117,43 @@ function rowToRun(row: RunSelect): Run {
 // ---------------------------------------------------------------------------
 // ControlPlaneService
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Team playbooks — server-side relay orchestration registry (J5)
+// ---------------------------------------------------------------------------
+
+export interface TeamStep {
+  templateType: string;
+  roleKey: string;
+  feedFrom: string[];
+}
+
+export const TEAM_PLAYBOOKS: Record<string, TeamStep[]> = {
+  sprint: [
+    { templateType: "content_acquisition", roleKey: "content", feedFrom: [] },
+    {
+      templateType: "private_conversion",
+      roleKey: "conversion",
+      feedFrom: ["contentAngles", "channelRecommendations"]
+    },
+    { templateType: "weekly_review", roleKey: "review", feedFrom: ["conversionDraft"] }
+  ],
+  contentReview: [
+    { templateType: "content_acquisition", roleKey: "content", feedFrom: [] },
+    { templateType: "weekly_review", roleKey: "review", feedFrom: ["contentAngles"] }
+  ]
+};
+
+function carriedSummary(payload: Record<string, unknown>, feedFrom: string[]): string {
+  return feedFrom
+    .map((field) => {
+      const value = payload[field];
+      if (Array.isArray(value)) return value.join("; ");
+      return typeof value === "string" ? value : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 export class ControlPlaneService {
   readonly db: Database;
@@ -364,6 +402,7 @@ export class ControlPlaneService {
           "successful_output"
         );
         await this.saveArtifact(result.run);
+        await this.advanceTeamOnCompletion(result.run);
       }
 
       span.setAttribute("runId", result.run.id);
@@ -485,6 +524,7 @@ export class ControlPlaneService {
           "successful_output"
         );
         await this.saveArtifact(resumed.run);
+        await this.advanceTeamOnCompletion(resumed.run);
       }
 
       span.setAttribute("result.status", resumed.run.status);
@@ -789,6 +829,229 @@ export class ControlPlaneService {
       }
     }
     return launched;
+  }
+
+  // -------------------------------------------------------------------------
+  // Team relay orchestration (J5) — server-side, approval-aware
+  // -------------------------------------------------------------------------
+
+  async launchTeam(input: { workspaceId: string; playbookKey: string; goal: string; audience?: string }) {
+    const steps = TEAM_PLAYBOOKS[input.playbookKey];
+    if (!steps) {
+      throw new NotFoundError(`Unknown playbook: ${input.playbookKey}`);
+    }
+
+    const now = new Date().toISOString();
+    const teamId = `team_${randomUUID()}`;
+    await this.db.insert(teamRuns).values({
+      id: teamId,
+      workspaceId: input.workspaceId,
+      playbookKey: input.playbookKey,
+      goal: input.goal,
+      audience: input.audience ?? "",
+      status: "running",
+      currentStep: 0,
+      stepsJson: JSON.stringify(steps),
+      runIdsJson: "[]",
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const firstRun = await this.launchTeamStep(teamId);
+    return { teamRunId: teamId, run: firstRun };
+  }
+
+  /** 创建指定步骤的运行;waiting_approval 会把团队置为 paused 状态 */
+  private async launchTeamStep(teamId: string): Promise<Run> {
+    const rows = await this.db.select().from(teamRuns).where(eq(teamRuns.id, teamId));
+    const team = rows[0];
+    if (!team) throw new NotFoundError(`Team run not found: ${teamId}`);
+
+    const steps = JSON.parse(team.stepsJson) as TeamStep[];
+    const stepIndex = team.currentStep;
+    const step = steps[stepIndex];
+
+    const runIds = (() => {
+      try {
+        return JSON.parse(team.runIdsJson) as string[];
+      } catch {
+        return [];
+      }
+    })();
+
+    const carried =
+      runIds.length > 0 && step.feedFrom.length > 0
+        ? await this.getCarriedPayload(runIds[runIds.length - 1], step.feedFrom)
+        : "";
+
+    let run: Run;
+    try {
+      run = await this.createRun({
+        workspaceId: team.workspaceId,
+        templateType: step.templateType as never,
+        input: {
+          businessSummary: carried
+            ? `${team.goal}\n[来自上一环节的输入]\n${carried}`
+            : team.goal,
+          targetCustomer: team.audience || "目标客群",
+          preferredChannels: ["email"],
+          ...(step.templateType === "content_acquisition"
+            ? { contentGoal: "团队接力产出" }
+            : step.templateType === "private_conversion"
+              ? { offerAsset: "团队接力 offer" }
+              : { metricsWindowDays: 7 })
+        }
+      });
+    } catch (error) {
+      await this.db
+        .update(teamRuns)
+        .set({ status: "failed", updatedAt: new Date().toISOString() })
+        .where(eq(teamRuns.id, teamId));
+      throw error;
+    }
+
+    // createRun 已把完成态写入(含 artifact/记忆);若该步直接完成则继续推进
+    if (run.status === "completed") {
+      runIds.push(run.id);
+      await this.advanceTeam(teamId, steps, runIds);
+    } else {
+      runIds.push(run.id);
+      const status = run.status === "waiting_approval" ? "waiting_approval" : team.status;
+      await this.db
+        .update(teamRuns)
+        .set({ runIdsJson: JSON.stringify(runIds), status, updatedAt: new Date().toISOString() })
+        .where(eq(teamRuns.id, teamId));
+    }
+
+    return run;
+  }
+
+  /** 完成钩子:命中最末位 run 的活跃团队自动推进下一棒 */
+  async advanceTeamOnCompletion(completedRun: Run): Promise<void> {
+    const activeTeams = await this.db
+      .select()
+      .from(teamRuns)
+      .where(and(eq(teamRuns.workspaceId, completedRun.workspaceId), eq(teamRuns.status, "running")));
+
+    for (const team of activeTeams) {
+      let runIds: string[] = [];
+      try {
+        runIds = JSON.parse(team.runIdsJson) as string[];
+      } catch {
+        continue;
+      }
+      const last = runIds[runIds.length - 1];
+      if (!last || last !== completedRun.id) continue;
+
+      const steps = JSON.parse(team.stepsJson) as TeamStep[];
+      await this.advanceTeam(team.id, steps, runIds);
+    }
+  }
+
+  private async advanceTeam(
+    teamId: string,
+    steps: TeamStep[],
+    runIds: string[]
+  ): Promise<void> {
+    const rows = await this.db.select().from(teamRuns).where(eq(teamRuns.id, teamId));
+    const team = rows[0];
+    if (!team || team.status === "failed") return;
+
+    const nextIndex = team.currentStep + 1;
+
+    if (nextIndex >= steps.length) {
+      await this.db
+        .update(teamRuns)
+        .set({ status: "completed", currentStep: steps.length - 1, runIdsJson: JSON.stringify(runIds), updatedAt: new Date().toISOString() })
+        .where(eq(teamRuns.id, teamId));
+      return;
+    }
+
+    await this.db
+      .update(teamRuns)
+      .set({ currentStep: nextIndex, runIdsJson: JSON.stringify(runIds), updatedAt: new Date().toISOString() })
+      .where(eq(teamRuns.id, teamId));
+
+    await this.launchTeamStep(teamId);
+  }
+
+  private async getCarriedPayload(
+    runId: string,
+    feedFrom: string[]
+  ): Promise<string> {
+    const run = await this.getRun(runId);
+    const payload = run.outputPayload ?? {};
+    return carriedSummary(payload, feedFrom);
+  }
+
+  async getTeam(teamId: string) {
+    const rows = await this.db.select().from(teamRuns).where(eq(teamRuns.id, teamId));
+    const team = rows[0];
+    if (!team) throw new NotFoundError(`Team run not found: ${teamId}`);
+
+    let steps: TeamStep[] = [];
+    let runIds: string[] = [];
+    try {
+      steps = JSON.parse(team.stepsJson) as TeamStep[];
+    } catch {}
+    try {
+      runIds = JSON.parse(team.runIdsJson) as string[];
+    } catch {}
+
+    const runsById = new Map<string, Run>();
+    for (const runId of runIds) {
+      try {
+        runsById.set(runId, await this.getRun(runId));
+      } catch {
+        // run row may be missing — skip
+      }
+    }
+
+    return {
+      id: team.id,
+      workspaceId: team.workspaceId,
+      playbookKey: team.playbookKey,
+      goal: team.goal,
+      audience: team.audience,
+      status: team.status,
+      currentStep: team.currentStep,
+      steps: steps.map((step, index) => ({
+        ...step,
+        state:
+          index < team.currentStep
+            ? "done"
+            : index === team.currentStep
+              ? team.status === "completed"
+                ? "done"
+                : team.status
+              : "pending",
+        runId: runIds[index],
+        outputSummary: (() => {
+          const run = runIds[index] ? runsById.get(runIds[index]) : undefined;
+          if (!run?.outputPayload) return undefined;
+          const values = Object.values(run.outputPayload);
+          const firstList = values.find((value) => Array.isArray(value)) as string[] | undefined;
+          const firstString = values.find((value) => typeof value === "string") as string | undefined;
+          return (firstList?.join(" / ") ?? firstString ?? "").slice(0, 120);
+        })()
+      }))
+    };
+  }
+
+  async listTeams(workspaceId: string) {
+    const rows = await this.db
+      .select()
+      .from(teamRuns)
+      .where(eq(teamRuns.workspaceId, workspaceId))
+      .orderBy(sql`rowid DESC`);
+    return rows.map((row) => ({
+      id: row.id,
+      playbookKey: row.playbookKey,
+      goal: row.goal,
+      status: row.status,
+      currentStep: row.currentStep,
+      createdAt: row.createdAt
+    }));
   }
 
   private async assertWorkspaceExists(workspaceId: string): Promise<void> {

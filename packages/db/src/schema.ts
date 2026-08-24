@@ -154,3 +154,21 @@ export const schedules = sqliteTable("schedules", {
   status: text("status").notNull().default("active"), // 'active' | 'paused'
   createdAt: text("created_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Team runs — server-side multi-agent relay orchestration (J5)
+// ---------------------------------------------------------------------------
+
+export const teamRuns = sqliteTable("team_runs", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  playbookKey: text("playbook_key").notNull(),
+  goal: text("goal").notNull(),
+  audience: text("audience").notNull().default(""),
+  status: text("status").notNull().default("running"), // running | waiting_approval | completed | failed
+  currentStep: integer("current_step").notNull().default(0),
+  stepsJson: text("steps_json").notNull(), // JSON [{templateType, roleKey, feedFrom}]
+  runIdsJson: text("run_ids_json").notNull().default("[]"), // JSON string[], index = step order
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { createRun, listTemplates } from "../lib/api.js";
+import { createRun, listTemplates, pickPlanner } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
 import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
@@ -50,46 +50,44 @@ function detectIntent(query: string): TemplateType {
 }
 
 /**
- * J2-C 智能匹配:目标文本 × 全量智能体(内置+定制)关键词重合度排序。
- * 定制智能体命中度更高时优先生效,实现"最佳工作流适配"。
+ * J5-B 智能规划器:服务端 LLM 优先(带 catalog 全量含定制智能体),
+ * 失败回落服务端规则打分;本地正则仅作最后兜底。
  */
 function useSmartAgentPick(query: string | undefined) {
-  const [catalog, setCatalog] = useState<Array<{ type: string; name: string; description?: string }>>([]);
   const [picked, setPicked] = useState<TemplateType | null>(null);
   const [pickedName, setPickedName] = useState<string | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
 
   useEffect(() => {
-    listTemplates()
-      .then((items) => {
-        const list = items as Array<{ type: string; name: string; description?: string }>;
-        setCatalog(list);
-        if (!query) return;
-        const q = query.toLowerCase();
-        let best: { type: string; score: number } | null = null;
-        for (const item of list) {
-          const haystack = `${item.name} ${item.description ?? ""}`.toLowerCase();
-          let score = 0;
-          for (const word of q.split(/[\s,，。.;；]+/).filter(Boolean)) {
-            if (haystack.includes(word) || haystack.includes(word.slice(0, Math.min(4, word.length)))) {
-              score += 2;
-            }
-          }
-          if (item.type === detectIntent(query)) score += 3; // 内置意图保底
-          if (!best || score > best.score) best = { type: item.type, score };
-        }
-        if (best) {
-          const match = list.find((item) => item.type === best!.type);
-          setPicked((match?.type ?? null) as TemplateType | null);
-          setPickedName(match?.name ?? null);
-        }
+    if (!query) return;
+    let cancelled = false;
+
+    pickPlanner(query)
+      .then((decision) => {
+        if (cancelled || !decision) return;
+        setPicked(decision.pickedType as TemplateType);
+        setReason(decision.reason);
+        listTemplates()
+          .then((items) => {
+            if (cancelled) return;
+            const match = (items as Array<{ type: string; name: string }>).find(
+              (item) => item.type === decision.pickedType
+            );
+            setPickedName(match?.name ?? decision.pickedType);
+          })
+          .catch(() => setPickedName(decision.pickedType));
       })
       .catch(() => {
-        // catalog optional — fallback to regex intent only
+        // 服务端不可达 → 本地正则兜底
+        setPicked(detectIntent(query));
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    return () => {
+      cancelled = true;
+    };
   }, [query]);
 
-  return { catalog, picked, pickedName };
+  return { picked, pickedName, reason };
 }
 
 let messageId = 0;
@@ -299,6 +297,9 @@ export function LaunchFlowPage(props: {
                 <Badge variant="default">
                   {smart.pickedName ?? (intent ? t(`templates.names.${intent}`) : intent)}
                 </Badge>
+                {smart.reason && (
+                  <p className="m-0 text-[12.5px] text-muted leading-snug">💡 {smart.reason}</p>
+                )}
                 <div className="flex flex-wrap gap-1.5">
                   {summaryChips.map((chip) => (
                     <span

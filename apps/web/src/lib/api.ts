@@ -260,3 +260,53 @@ export function listSchedules(workspaceId?: string) {
 export function deleteSchedule(scheduleId: string) {
   return request(`/api/schedules/${scheduleId}`, { method: "DELETE" });
 }
+
+// ---------------------------------------------------------------------------
+// Team relay orchestration + LLM Planner (J5)
+// ---------------------------------------------------------------------------
+
+export interface TeamStepView {
+  templateType: string;
+  roleKey: string;
+  feedFrom: string[];
+  state: "done" | "running" | "waiting_approval" | "failed" | "pending";
+  runId?: string;
+  outputSummary?: string;
+}
+
+export interface TeamRunRecord {
+  id: string;
+  workspaceId: string;
+  playbookKey: string;
+  goal: string;
+  audience: string;
+  status: "running" | "waiting_approval" | "completed" | "failed";
+  currentStep: number;
+  steps: TeamStepView[];
+}
+
+export function launchTeam(payload: {
+  workspaceId: string;
+  playbookKey: string;
+  goal: string;
+  audience?: string;
+}) {
+  return request("/api/teams/launch", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function getTeam(teamId: string) {
+  return request<TeamRunRecord>(`/api/teams/${teamId}`);
+}
+
+export interface PlannerDecision {
+  pickedType: string;
+  reason: string;
+  planner: "llm" | "rules";
+}
+
+export function pickPlanner(goal: string) {
+  return request<PlannerDecision>("/api/planner/pick", {
+    method: "POST",
+    body: JSON.stringify({ goal })
+  });
+}

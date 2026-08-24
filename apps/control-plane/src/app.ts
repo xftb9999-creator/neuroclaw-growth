@@ -9,7 +9,9 @@ import { z } from "zod";
 
 import {
   streamGenerate,
-  isAiAvailable
+  isAiAvailable,
+  pickAgentWithLLM,
+  pickAgentWithRules
 } from "@neuroclaw/agent-core";
 import {
   approvalDecisionSchema,
@@ -222,6 +224,74 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
     await service.deleteSchedule(c.req.param("scheduleId"));
     return c.json({ ok: true });
   });
+
+  // -----------------------------------------------------------------------
+  // Team relay orchestration (J5)
+  // -----------------------------------------------------------------------
+
+  const teamLaunchSchema = z.object({
+    workspaceId: z.string().min(1),
+    playbookKey: z.string().min(1),
+    goal: z.string().min(1),
+    audience: z.string().optional()
+  });
+
+  api.post(
+    "/teams/launch",
+    requirePermission("run:create"),
+    zodValidator("json", teamLaunchSchema),
+    async (c) => {
+      try {
+        return c.json(await service.launchTeam(c.req.valid("json")), 201);
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  api.get("/teams", requirePermission("run:read"), async (c) => {
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId) {
+      return c.json({ message: "workspaceId is required" }, 400);
+    }
+    return c.json(await service.listTeams(workspaceId));
+  });
+
+  api.get("/teams/:teamId", requirePermission("run:read"), async (c) => {
+    try {
+      return c.json(await service.getTeam(c.req.param("teamId")));
+    } catch (error) {
+      return handleError(error, c);
+    }
+  });
+
+  // LLM Planner — route a goal to the best-fit agent (J5-B)
+  const plannerSchema = z.object({ goal: z.string().min(1) });
+
+  api.post(
+    "/planner/pick",
+    requirePermission("run:create"),
+    zodValidator("json", plannerSchema),
+    async (c) => {
+      const { goal } = c.req.valid("json");
+      const catalog = service.registry
+        .list()
+        .filter((template) => template.status !== "inactive")
+        .map((template) => ({
+          type: template.type,
+          name: template.name,
+          description: template.description ?? ""
+        }));
+
+      const llm = await pickAgentWithLLM(catalog, goal);
+      if (llm) return c.json(llm);
+
+      const rules = pickAgentWithRules(catalog, goal);
+      if (rules) return c.json(rules);
+
+      return c.json({ pickedType: "content_acquisition", reason: "default", planner: "rules" });
+    }
+  );
 
   api.post(
     "/runs",

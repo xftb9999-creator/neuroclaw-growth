@@ -313,6 +313,91 @@ export async function generateStructuredForAgent(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// LLM Planner (J5-B) — route a free-form goal to the best-fit agent
+// ---------------------------------------------------------------------------
+
+export interface PlannerCatalogItem {
+  type: string;
+  name: string;
+  description?: string;
+}
+
+export interface PlannerDecision {
+  pickedType: string;
+  reason: string;
+  planner: "llm" | "rules";
+}
+
+const plannerSchema = z.object({
+  pickedType: z.string().describe("type of the best-fit agent from the catalog"),
+  reason: z.string().describe("one-sentence reason in the user's language")
+});
+
+export async function pickAgentWithLLM(
+  catalog: PlannerCatalogItem[],
+  goal: string
+): Promise<PlannerDecision | null> {
+  const model = getModel();
+  if (!model || catalog.length === 0) return null;
+
+  const catalogDump = catalog
+    .map((item) => `- type: ${item.type} | name: ${item.name} | ${item.description ?? ""}`)
+    .join("\n");
+
+  try {
+    const result = await generateObject({
+      model,
+      schema: plannerSchema,
+      system:
+        "You are an agent-routing planner. Given a user's growth goal and a catalog of available agents, pick exactly one agent type from the catalog that fits best. Respond with its exact type and a short reason in the user's language.",
+      prompt: `Catalog:\n${catalogDump}\n\nUser goal: ${goal}`
+    });
+
+    const picked = result.object.pickedType;
+    if (!catalog.some((item) => item.type === picked)) return null;
+
+    return {
+      pickedType: picked,
+      reason: result.object.reason,
+      planner: "llm"
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 规则兜底:关键词重合度打分(与前端旧逻辑一致,服务端化) */
+export function pickAgentWithRules(
+  catalog: PlannerCatalogItem[],
+  goal: string
+): PlannerDecision | null {
+  if (catalog.length === 0) return null;
+  const q = goal.toLowerCase();
+  let best: { item: PlannerCatalogItem; score: number } | null = null;
+
+  for (const item of catalog) {
+    const haystack = `${item.name} ${item.description ?? ""}`.toLowerCase();
+    let score = 0;
+    for (const word of q.split(/[\s,，。.;；]+/).filter(Boolean)) {
+      if (
+        haystack.includes(word) ||
+        haystack.includes(word.slice(0, Math.min(4, word.length)))
+      ) {
+        score += 2;
+      }
+    }
+    if (!best || score > best.score) best = { item, score };
+  }
+
+  if (!best) return null;
+  return {
+    pickedType: best.item.type,
+    reason: "keyword match",
+    planner: "rules"
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Streaming generation (for real-time AI responses via SSE)
 // ---------------------------------------------------------------------------
 
