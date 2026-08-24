@@ -46,7 +46,7 @@ test("desktop approval flow supports approve and reject", async ({ page, isMobil
   await page.getByTestId("launch-run").click();
   await expect(page.getByTestId("run-status")).toHaveText("waiting_approval");
   await page.getByTestId("approve-run").click();
-  await expect(page.getByTestId("run-status")).toHaveText("completed");
+  await expect(page.getByTestId("run-status")).toHaveText("completed", { timeout: 20_000 });
 
   await page.goto("/templates");
   await page.getByTestId("select-private_conversion").click();
@@ -56,7 +56,7 @@ test("desktop approval flow supports approve and reject", async ({ page, isMobil
   await page.getByTestId("field-offerAsset").fill("VIP audit");
   await page.getByTestId("launch-run").click();
   await page.getByTestId("reject-run").click();
-  await expect(page.getByTestId("run-status")).toHaveText("cancelled");
+  await expect(page.getByTestId("run-status")).toHaveText("cancelled", { timeout: 20_000 });
 });
 
 test("desktop error recovery shows validation feedback", async ({ page, isMobile }) => {

@@ -7,6 +7,7 @@ import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
 import { ErrorBanner, RouteLayout, statusToBadgeVariant } from "../components/Layout.js";
+import { InputSummaryStrip, PipelineStepper } from "../components/PipelineStepper.js";
 import type { ApprovalRequest, RunRecord } from "../types.js";
 
 export function RunStatusPage(props: {
@@ -44,6 +45,14 @@ export function RunStatusPage(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.runId]);
 
+  // 运行中每 2.5s 轮询,驱动链路 Stepper 点亮
+  useEffect(() => {
+    if (!run || !["queued", "running"].includes(run.status)) return;
+    const timer = window.setInterval(() => void load(), 2500);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.status, props.runId]);
+
   const activeApproval = approvals.find((approval) => approval.status === "pending");
 
   return (
@@ -69,6 +78,9 @@ export function RunStatusPage(props: {
               </Badge>
             </CardHeader>
             <CardContent>
+              <div className="mb-3">
+                <InputSummaryStrip input={run.input} />
+              </div>
               <p className="text-muted m-0">
                 {run.failureReason ?? t("status.readyForReview")}
               </p>
@@ -98,22 +110,7 @@ export function RunStatusPage(props: {
           <Card>
             <CardTitle>{t("status.stepTimeline")}</CardTitle>
             <CardContent>
-              <ol className="grid gap-3 list-none p-0 m-0">
-                {(run.stepResults ?? []).map((step) => (
-                  <li
-                    key={step.stepId}
-                    className="grid gap-1 border-l-2 border-line pl-3"
-                  >
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <strong className="text-ink">{step.stepId}</strong>
-                      <Badge variant={statusToBadgeVariant(step.status)}>
-                        {step.status}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-muted m-0">{step.summary}</p>
-                  </li>
-                ))}
-              </ol>
+              <PipelineStepper run={run} />
             </CardContent>
           </Card>
 

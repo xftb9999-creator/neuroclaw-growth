@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { listRunHistory } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
-import { navigate, writeRunDraft } from "../lib/router.js";
+import { navigate } from "../lib/router.js";
 import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card } from "../components/ui/Card.js";
@@ -85,21 +85,11 @@ export function HomePage(props: {
   const launch = () => {
     const text = query.trim();
     if (!text) {
-      navigate("/templates");
+      navigate("/launch");
       return;
     }
-    const intent = detectIntent(text);
-    if (!intent) {
-      navigate("/templates");
-      return;
-    }
-    writeRunDraft({
-      templateType: intent,
-      input: { businessSummary: text },
-      sourceRunId: "quickstart"
-    });
-    navigate(`/runs/new/${intent}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    window.sessionStorage.setItem("neuroclaw.launchQuery", text);
+    navigate("/launch");
   };
 
   const copyDraft = async (run: RunRecord) => {

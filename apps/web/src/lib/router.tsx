@@ -6,6 +6,7 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/" || pathname === "/home") return { name: "home" };
   if (pathname === "/templates") return { name: "templates" };
   if (pathname === "/profile") return { name: "profile" };
+  if (pathname === "/launch") return { name: "launch" };
   if (pathname === "/history") return { name: "history" };
   if (pathname === "/memory") return { name: "memory" };
 

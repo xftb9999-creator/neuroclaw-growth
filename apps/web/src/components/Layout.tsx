@@ -72,7 +72,10 @@ export function RouteLayout(props: { title: string; subtitle: string; children: 
               </Button>
             </nav>
 
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2.5">
+              <Button size="sm" onClick={() => navigate("/launch")} aria-label={t("launch.title")}>
+                ✦ {t("launch.title")}
+              </Button>
               <LanguageSwitcher />
             </div>
           </div>
