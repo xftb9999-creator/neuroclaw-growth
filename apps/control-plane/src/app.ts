@@ -19,8 +19,10 @@ import {
   agentStatusSchema,
   createRunInputSchema,
   createWorkspaceInputSchema,
+  savePlaybookInputSchema,
   templateTypeSchema,
   templateInputPayloadSchema,
+  updateAgentInputSchema,
   updateMemoryInputSchema
 } from "@neuroclaw/shared";
 import { isMcpAvailable, getMcpRegistry } from "@neuroclaw/tooling-mcp";
@@ -116,6 +118,60 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
     async (c) => {
       try {
         await service.updateAgentStatus(c.req.param("agentId"), c.req.valid("json").status);
+        return c.json({ ok: true });
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  // J7: full agent editing
+  api.patch(
+    "/agents/:agentId",
+    requirePermission("agent:create"),
+    zodValidator("json", updateAgentInputSchema),
+    async (c) => {
+      try {
+        await service.updateAgent(c.req.param("agentId"), c.req.valid("json"));
+        return c.json({ ok: true });
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  api.get("/knowledge/search", requirePermission("memory:read"), async (c) => {
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId) return c.json({ message: "workspaceId is required" }, 400);
+    return c.json(await service.searchKnowledge(workspaceId, c.req.query("q")));
+  });
+
+  const refineSchema = z.object({ workspaceId: z.string().min(1) });
+  api.post(
+    "/knowledge/ai-refine",
+    requirePermission("memory:write"),
+    zodValidator("json", refineSchema),
+    async (c) => {
+      try {
+        return c.json(await service.refineKnowledgeWithAI(c.req.valid("json").workspaceId));
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
+  // J7: playbooks — editable workflows
+  api.get("/playbooks", requirePermission("template:read"), async (c) => {
+    return c.json(await service.getPlaybooks());
+  });
+
+  api.put(
+    "/playbooks/:key",
+    requirePermission("agent:create"),
+    zodValidator("json", savePlaybookInputSchema),
+    async (c) => {
+      try {
+        await service.savePlaybook(c.req.param("key"), c.req.valid("json"));
         return c.json({ ok: true });
       } catch (error) {
         return handleError(error, c);

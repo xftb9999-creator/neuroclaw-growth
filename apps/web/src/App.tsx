@@ -14,6 +14,7 @@ import { LibraryPage } from "./pages/LibraryPage.js";
 import { MemoryPage } from "./pages/MemoryPage.js";
 import { SchedulePage } from "./pages/SchedulePage.js";
 import { TeamPage } from "./pages/TeamPage.js";
+import { WorkflowsPage } from "./pages/WorkflowsPage.js";
 import { OnboardingPage } from "./pages/OnboardingPage.js";
 import { ResultDetailPage } from "./pages/ResultDetailPage.js";
 import { RunSetupPage } from "./pages/RunSetupPage.js";
@@ -62,6 +63,8 @@ export function App() {
     return <AgentsSquarePage />;
   if (route.name === "agent-new")
     return <AgentBuilderPage onCreated={() => go("/agents")} />;
+  if (route.name === "workflows")
+    return <WorkflowsPage />;
   if (route.name === "library")
     return <LibraryPage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
   if (route.name === "knowledge")

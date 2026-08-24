@@ -16,7 +16,8 @@ export {
   artifacts,
   knowledgeEntries,
   schedules,
-  teamRuns
+  teamRuns,
+  playbooks
 } from "./schema.js";
 
 export interface CreateDbOptions {
@@ -135,7 +136,15 @@ const DDL_STATEMENTS = [
     content TEXT NOT NULL,
     tags TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
+    run_id TEXT,
     created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS playbooks (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    steps_json TEXT NOT NULL,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS schedules (
     id TEXT PRIMARY KEY,

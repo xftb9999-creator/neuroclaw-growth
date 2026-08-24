@@ -2,6 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { createRun, listTemplates, pickPlanner } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
+import {
+  isVoiceInputSupported,
+  isVoiceOutputEnabled,
+  setVoiceOutputEnabled,
+  speak,
+  startListening,
+  type SpeechLang
+} from "../lib/speech.js";
 import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card } from "../components/ui/Card.js";
@@ -109,6 +117,40 @@ export function LaunchFlowPage(props: {
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
   const smart = useSmartAgentPick(props.initialQuery);
+  const voiceSupported = useMemo(() => isVoiceInputSupported(), []);
+  const [voiceOn, setVoiceOn] = useState<boolean>(() => isVoiceOutputEnabled());
+  const [listening, setListening] = useState(false);
+
+  const speakIfEnabled = useCallback(
+    (text: string) => {
+      const lang: SpeechLang = t("common.language") === "语言" ? "zh-CN" : "en-US";
+      speak(text, lang);
+    },
+    [t]
+  );
+
+  const toggleMic = () => {
+    if (listening) {
+      setListening(false);
+      return;
+    }
+    const lang: SpeechLang = t("common.language") === "语言" ? "zh-CN" : "en-US";
+    const session = startListening({
+      lang,
+      onInterim: (text) => setFreeText((current) => `${current}${text}`),
+      onFinalChunk: (text) => setFreeText((current) => `${current}${text}`),
+      onEnd: () => setListening(false)
+    });
+    if (session) {
+      setVoiceOutputEnabled(true);
+      setVoiceOn(true);
+      setListening(true);
+      window.setTimeout(() => {
+        session.stop();
+        setListening(false);
+      }, 8000);
+    }
+  };
 
   // 智能匹配置顶:若定制智能体胜出,覆盖正则意图
   useEffect(() => {
@@ -140,8 +182,9 @@ export function LaunchFlowPage(props: {
       setSelected([]);
       setStep("audience");
       pushAssistant(t("launch.ask.audience"), AUDIENCE_OPTIONS, "audience");
+      speakIfEnabled(`${t("launch.ack." + detected)} ${t("launch.ask.audience")}`);
     },
-    [pushAssistant, t]
+    [pushAssistant, t, speakIfEnabled]
   );
 
   // Seed the conversation once on mount.
@@ -320,6 +363,24 @@ export function LaunchFlowPage(props: {
 
         {/* 底部操作区 */}
         <div className="border-t hairline p-4 bg-white/70 grid gap-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] text-muted">{t("home.launch.hint")}</span>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !voiceOn;
+                setVoiceOn(next);
+                setVoiceOutputEnabled(next);
+              }}
+              aria-label="voice output"
+              aria-pressed={voiceOn}
+              className={`text-[12.5px] font-semibold rounded-pill px-3 py-1 border cursor-pointer transition-colors ${
+                voiceOn ? "border-brand bg-brand-light text-brand" : "border-line-strong bg-white text-muted"
+              }`}
+            >
+              {voiceOn ? "🔊 语音播报开" : "🔇 语音播报关"}
+            </button>
+          </div>
           <ErrorBanner error={error} />
           {step === "intent" && !props.initialQuery && (
             <div className="flex gap-2.5 flex-wrap sm:flex-nowrap">
@@ -329,10 +390,25 @@ export function LaunchFlowPage(props: {
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && freeText.trim()) startWithQuery(freeText.trim());
                 }}
-                placeholder={t("home.launch.placeholder")}
+                placeholder={listening ? "🎙️ …" : t("home.launch.placeholder")}
                 aria-label={t("home.launch.placeholder")}
-                className="flex-1 min-w-[220px] border border-line bg-surface-strong/40 rounded-pill px-5 py-3 text-[15px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand placeholder:text-muted/70"
+                className="flex-1 min-w-[200px] border border-line bg-surface-strong/40 rounded-pill px-5 py-3 text-[15px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand placeholder:text-muted/70"
               />
+              {voiceSupported && (
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  aria-label="voice input"
+                  aria-pressed={listening}
+                  className={`shrink-0 w-[48px] h-[48px] rounded-full border text-lg cursor-pointer transition-all ${
+                    listening
+                      ? "border-brand bg-brand-light text-brand animate-pulse"
+                      : "border-line-strong bg-white hover:border-brand/50"
+                  }`}
+                >
+                  🎙️
+                </button>
+              )}
               <Button size="lg" className="shrink-0" onClick={() => freeText.trim() && startWithQuery(freeText.trim())}>
                 ✦
               </Button>

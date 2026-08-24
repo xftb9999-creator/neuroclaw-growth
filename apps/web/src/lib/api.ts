@@ -146,6 +146,22 @@ export function updateAgentStatus(agentId: string, status: "active" | "inactive"
   });
 }
 
+export function updateAgent(
+  agentId: string,
+  payload: {
+    name?: string;
+    persona?: string;
+    description?: string;
+    focusAreas?: string[];
+    status?: "active" | "inactive";
+  }
+) {
+  return request(`/api/agents/${agentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
 export interface McpStatusResponse {
   available: boolean;
   servers: Array<{ name: string; connected: boolean; toolCount: number; lastError?: string }>;
@@ -187,6 +203,7 @@ export interface KnowledgeRecord {
   content: string;
   tags: string[];
   source: string;
+  runId?: string;
   createdAt: string;
 }
 

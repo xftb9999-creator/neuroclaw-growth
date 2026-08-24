@@ -35,7 +35,9 @@ import {
   type TemplateOutputPayload,
   type Workspace,
   type WorkspacePlan,
-  type CreateAgentInput
+  type CreateAgentInput,
+  type UpdateAgentInput,
+  type SavePlaybookInput
 } from "@neuroclaw/shared";
 import {
   builtinRegistry,
@@ -43,6 +45,8 @@ import {
   listTemplates as listBuiltinTemplates
 } from "@neuroclaw/templates";
 import { TemporalWorkerSkeleton } from "@neuroclaw/temporal-worker";
+import { generateStructuredForAgent } from "@neuroclaw/agent-core";
+import { playbooks as playbooksTable } from "@neuroclaw/db";
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -278,16 +282,42 @@ export class ControlPlaneService {
   }
 
   async updateAgentStatus(agentId: string, status: "active" | "inactive"): Promise<void> {
+    await this.updateAgent(agentId, { status });
+  }
+
+  /** J7:编辑定制智能体(名称/persona/描述/专长/状态),并同步注册表 */
+  async updateAgent(agentId: string, patch: UpdateAgentInput): Promise<void> {
     const rows = await this.db.select().from(agents).where(eq(agents.id, agentId));
     if (rows.length === 0) {
       throw new NotFoundError(`Agent not found: ${agentId}`);
     }
     const row = rows[0];
-    await this.db.update(agents).set({ status }).where(eq(agents.id, agentId));
-    if (status === "inactive") {
+    const next = {
+      ...row,
+      name: patch.name ?? row.name,
+      persona: patch.persona ?? row.persona,
+      description: patch.description ?? row.description,
+      focusAreas: patch.focusAreas ? JSON.stringify(patch.focusAreas) : row.focusAreas,
+      status: patch.status ?? (row.status as "active" | "inactive")
+    };
+
+    await this.db
+      .update(agents)
+      .set({
+        name: next.name,
+        persona: next.persona,
+        description: next.description,
+        focusAreas: next.focusAreas,
+        status: next.status
+      })
+      .where(eq(agents.id, agentId));
+
+    if (next.status === "inactive") {
       globalRegistry.unregister(row.slug);
     } else {
-      globalRegistry.register(this.agentRowToTemplate({ ...row, status }));
+      globalRegistry.register(
+        this.agentRowToTemplate({ ...next, description: next.description ?? null })
+      );
     }
   }
 
@@ -610,7 +640,115 @@ export class ControlPlaneService {
       contentJson: JSON.stringify(payload),
       createdAt: new Date().toISOString()
     });
+
+    await this.autoDepositKnowledge(run);
     return id;
+  }
+
+  /** J7:系统自动沉淀 — 完成运行的产出写入知识库(source='run',可溯源 run_id) */
+  private async autoDepositKnowledge(run: Run): Promise<void> {
+    const existing = await this.db
+      .select()
+      .from(knowledgeEntries)
+      .where(eq(knowledgeEntries.runId, run.id));
+    if (existing.length > 0) return; // 幂等
+
+    const payload = run.outputPayload ?? {};
+    const parts = Object.entries(payload).map(([key, value]) => {
+      if (Array.isArray(value)) return `${key}: ${value.join("; ")}`;
+      return `${key}: ${String(value).slice(0, 300)}`;
+    });
+    if (parts.length === 0) return;
+
+    const firstList = Object.values(payload).find((value) => Array.isArray(value)) as
+      | string[]
+      | undefined;
+    const title = (firstList?.[0] ?? `${run.templateType} 成果`).slice(0, 80);
+
+    await this.db.insert(knowledgeEntries).values({
+      id: `kn_${randomUUID()}`,
+      workspaceId: run.workspaceId,
+      title: `🤖 ${title}`,
+      content: parts.join("\n"),
+      tags: JSON.stringify([run.templateType, "auto"]),
+      source: "run",
+      runId: run.id,
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  /** J7:关键词检索(人工搜索与 AI 调用共用通路) */
+  async searchKnowledge(workspaceId: string, query?: string) {
+    const all = await this.listKnowledgeEntries(workspaceId);
+    const q = query?.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (entry) =>
+        entry.title.toLowerCase().includes(q) ||
+        entry.content.toLowerCase().includes(q) ||
+        entry.tags.some((tag) => tag.toLowerCase().includes(q))
+    );
+  }
+
+  /** J7:AI 提炼 — 把近期条目蒸馏为一条「品牌速览」(source='ai');无 LLM 时规则拼接 */
+  async refineKnowledgeWithAI(workspaceId: string) {
+    const entries = await this.listKnowledgeEntries(workspaceId);
+    const recent = entries.slice(0, 8);
+    if (recent.length < 2) {
+      throw new Error("Need at least 2 knowledge entries to refine");
+    }
+
+    let refinedTitle = "品牌速览";
+    let refinedContent = "";
+    let usedLLM = false;
+
+    try {
+      const result = await generateStructuredForAgent({
+        persona:
+          "You are a brand-knowledge curator. Merge the given knowledge fragments into one crisp brand brief.",
+        instruction:
+          "Merge these fragments into a single brief. Respond with fields: title (short), content (the merged brief), tags (array).",
+        fields: [
+          { name: "title", type: "string", required: true },
+          { name: "content", type: "string", required: true },
+          { name: "tags", type: "string[]", required: true }
+        ],
+        input: {
+          fragments: recent.map((entry) => ({
+            title: entry.title,
+            content: entry.content.slice(0, 500)
+          }))
+        }
+      });
+      refinedTitle = String(result.title ?? refinedTitle).slice(0, 80);
+      refinedContent = String(result.content ?? "");
+      const tags = Array.isArray(result.tags) ? result.tags.map(String).slice(0, 5) : ["ai"];
+      refinedContent += `\n[tags:${tags.join(",")}]`;
+      usedLLM = true;
+      void tags;
+    } catch {
+      // LLM 不可用 → 规则拼接
+    }
+
+    if (!usedLLM) {
+      refinedContent = recent
+        .map((entry) => `• ${entry.title}: ${entry.content.slice(0, 200)}`)
+        .join("\n");
+    }
+
+    const tags = usedLLM ? ["ai"] : ["ai", "merged"];
+    const id = `kn_${randomUUID()}`;
+    await this.db.insert(knowledgeEntries).values({
+      id,
+      workspaceId,
+      title: `✨ ${refinedTitle}`,
+      content: refinedContent,
+      tags: JSON.stringify(tags),
+      source: "ai",
+      createdAt: new Date().toISOString()
+    });
+
+    return { id, usedLLM };
   }
 
   async listArtifacts(workspaceId: string) {
@@ -679,6 +817,7 @@ export class ControlPlaneService {
         }
       })(),
       source: row.source,
+      runId: row.runId ?? undefined,
       createdAt: row.createdAt
     }));
   }
@@ -832,11 +971,93 @@ export class ControlPlaneService {
   }
 
   // -------------------------------------------------------------------------
+  // Playbooks (J7) — editable workflow definitions, DB overrides over defaults
+  // -------------------------------------------------------------------------
+
+  async getPlaybooks() {
+    const defaults = Object.entries(TEAM_PLAYBOOKS).map(([key, steps]) => ({
+      key,
+      name: key === "sprint" ? "Opening Sprint" : key === "contentReview" ? "Content Weekly Loop" : key,
+      steps,
+      builtin: true
+    }));
+
+    const rows = await this.db.select().from(playbooksTable);
+    const overrides = new Map(rows.map((row) => [row.key, row]));
+
+    const merged = defaults.map((preset) => {
+      const override = overrides.get(preset.key);
+      if (!override) return preset;
+      try {
+        return {
+          key: preset.key,
+          name: override.name,
+          steps: JSON.parse(override.stepsJson) as TeamStep[],
+          builtin: false
+        };
+      } catch {
+        return preset;
+      }
+    });
+
+    for (const row of rows) {
+      if (overrides.has(row.key)) continue;
+      if (TEAM_PLAYBOOKS[row.key]) continue; // default already merged
+      try {
+        merged.push({
+          key: row.key,
+          name: row.name,
+          steps: JSON.parse(row.stepsJson) as TeamStep[],
+          builtin: false
+        });
+      } catch {
+        // corrupt row — skip
+      }
+    }
+
+    return merged;
+  }
+
+  async savePlaybook(key: string, input: SavePlaybookInput): Promise<void> {
+    if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+      throw new Error("Playbook key must be lowercase snake_case");
+    }
+    const now = new Date().toISOString();
+    const isBuiltin = Boolean(TEAM_PLAYBOOKS[key]);
+    await this.db
+      .insert(playbooksTable)
+      .values({
+        key,
+        name: input.name,
+        stepsJson: JSON.stringify(input.steps),
+        builtin: isBuiltin,
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: playbooksTable.key,
+        set: { name: input.name, stepsJson: JSON.stringify(input.steps), updatedAt: now }
+      });
+  }
+
+  /** launchTeam 现读取生效版(默认 + 数据库覆盖/新增) */
+  private async getEffectivePlaybook(key: string): Promise<TeamStep[] | null> {
+    const rows = await this.db.select().from(playbooksTable).where(eq(playbooksTable.key, key));
+    if (rows.length > 0) {
+      try {
+        return JSON.parse(rows[0].stepsJson) as TeamStep[];
+      } catch {
+        // fall through to defaults
+      }
+    }
+    return TEAM_PLAYBOOKS[key] ?? null;
+  }
+
+  // -------------------------------------------------------------------------
   // Team relay orchestration (J5) — server-side, approval-aware
   // -------------------------------------------------------------------------
 
   async launchTeam(input: { workspaceId: string; playbookKey: string; goal: string; audience?: string }) {
-    const steps = TEAM_PLAYBOOKS[input.playbookKey];
+    const steps = await this.getEffectivePlaybook(input.playbookKey);
     if (!steps) {
       throw new NotFoundError(`Unknown playbook: ${input.playbookKey}`);
     }

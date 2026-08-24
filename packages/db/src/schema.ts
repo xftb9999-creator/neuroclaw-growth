@@ -133,8 +133,21 @@ export const knowledgeEntries = sqliteTable("knowledge_entries", {
   title: text("title").notNull(),
   content: text("content").notNull(),
   tags: text("tags"), // JSON string[]
-  source: text("source").notNull().default("manual"), // 'manual' | 'run'
+  source: text("source").notNull().default("manual"), // 'manual' | 'run' | 'ai'
+  runId: text("run_id"),
   createdAt: text("created_at").notNull()
+});
+
+// ---------------------------------------------------------------------------
+// Playbooks — editable workflow definitions (J7)
+// ---------------------------------------------------------------------------
+
+export const playbooks = sqliteTable("playbooks", {
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  stepsJson: text("steps_json").notNull(), // JSON [{templateType, roleKey, feedFrom}]
+  builtin: integer("builtin", { mode: "boolean" }).notNull().default(false),
+  updatedAt: text("updated_at").notNull()
 });
 
 // ---------------------------------------------------------------------------

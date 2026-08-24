@@ -4,6 +4,7 @@ import {
   fetchMcpStatus,
   listAgents,
   listTemplates,
+  updateAgent,
   updateAgentStatus,
   type AgentRecord,
   type McpStatusResponse
@@ -58,6 +59,34 @@ export function AgentsSquarePage() {
     await load();
   };
 
+  // J7: inline editor state
+  const [editing, setEditing] = useState<AgentRecord | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPersona, setEditPersona] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const openEditor = (agent: AgentRecord) => {
+    setEditing(agent);
+    setEditName(agent.name);
+    setEditPersona(agent.persona);
+  };
+
+  const saveEditor = async () => {
+    if (!editing) return;
+    setSavingEdit(true);
+    try {
+      await updateAgent(editing.id, {
+        name: editName.trim() || editing.name,
+        persona: editPersona.trim() || editing.persona,
+        description: editing.description
+      });
+      setEditing(null);
+      await load();
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const customBySlug = new Map(agents.map((agent) => [agent.slug, agent]));
 
   return (
@@ -104,9 +133,14 @@ export function AgentsSquarePage() {
                         {t("agents.launch")}
                       </Button>
                       {isCustom && agent && (
-                        <Button size="sm" variant="outline" onClick={() => void toggle(agent)}>
-                          {agent.status === "active" ? t("agents.disable") : t("agents.enable")}
-                        </Button>
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => openEditor(agent)}>
+                            ✏️ {t("agents.edit")}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => void toggle(agent)}>
+                            {agent.status === "active" ? t("agents.disable") : t("agents.enable")}
+                          </Button>
+                        </>
                       )}
                     </div>
                   </CardContent>
@@ -162,6 +196,39 @@ export function AgentsSquarePage() {
           </div>
         )}
       </section>
+      {/* J7: 编辑智能体弹层 */}
+      {editing && (
+        <div className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[2px] grid place-items-center p-4" role="dialog" aria-modal="true">
+          <Card className="w-full max-w-lg grid gap-3 p-6">
+            <h3 className="m-0 font-bold text-lg">✏️ {t("agents.edit")} · {editing.name}</h3>
+            <label className="grid gap-1 text-sm font-medium">
+              {t("agents.nameCol")}
+              <input
+                value={editName}
+                onChange={(event) => setEditName(event.target.value)}
+                className="border border-line rounded-input px-3 py-2 outline-none focus-visible:outline-2 focus-visible:outline-brand"
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-medium">
+              Persona
+              <textarea
+                value={editPersona}
+                onChange={(event) => setEditPersona(event.target.value)}
+                rows={4}
+                className="border border-line rounded-input px-3 py-2 outline-none focus-visible:outline-2 focus-visible:outline-brand resize-vertical"
+              />
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" onClick={() => setEditing(null)}>
+                {t("memory.cancel")}
+              </Button>
+              <Button onClick={() => void saveEditor()} disabled={savingEdit}>
+                {savingEdit ? t("setup.launching") : t("memory.save")}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </RouteLayout>
   );
 }

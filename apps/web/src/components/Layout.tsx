@@ -92,6 +92,9 @@ export function RouteLayout(props: { title: string; subtitle: string; children: 
               <Button variant="ghost" onClick={() => navigate("/agents")}>
                 {t("common.nav.agents")}
               </Button>
+              <Button variant="ghost" onClick={() => navigate("/workflows")}>
+                {t("common.nav.workflows")}
+              </Button>
               <Button variant="ghost" onClick={() => navigate("/team")}>
                 {t("common.nav.team")}
               </Button>

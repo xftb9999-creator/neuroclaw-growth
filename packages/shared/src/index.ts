@@ -119,6 +119,28 @@ export const createAgentInputSchema = z.object({
 });
 export type CreateAgentInput = z.infer<typeof createAgentInputSchema>;
 
+export const updateAgentInputSchema = z.object({
+  name: z.string().min(1).optional(),
+  persona: z.string().min(4).optional(),
+  description: z.string().optional(),
+  focusAreas: z.array(z.string()).optional(),
+  status: agentStatusSchema.optional()
+});
+export type UpdateAgentInput = z.infer<typeof updateAgentInputSchema>;
+
+export const teamStepSchema = z.object({
+  templateType: z.string().min(1),
+  roleKey: z.string().min(1),
+  feedFrom: z.array(z.string()).default([])
+});
+export type TeamStep = z.infer<typeof teamStepSchema>;
+
+export const savePlaybookInputSchema = z.object({
+  name: z.string().min(1),
+  steps: z.array(teamStepSchema).min(1)
+});
+export type SavePlaybookInput = z.infer<typeof savePlaybookInputSchema>;
+
 export const runStatuses = [
   "draft",
   "queued",

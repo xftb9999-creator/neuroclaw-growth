@@ -4,6 +4,11 @@ import { listRunHistory } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
 import { navigate } from "../lib/router.js";
 import { useI18n } from "../lib/i18n.js";
+import {
+  isVoiceInputSupported,
+  startListening,
+  type SpeechLang
+} from "../lib/speech.js";
 import { Button } from "../components/ui/Button.js";
 import { Card } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
@@ -35,6 +40,8 @@ export function HomePage(props: {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [listening, setListening] = useState(false);
+  const voiceSupported = useMemo(() => isVoiceInputSupported(), []);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const load = async () => {
@@ -82,6 +89,27 @@ export function HomePage(props: {
     .filter((run) => run.status === "completed" && run.outputPayload)
     .slice(0, 3);
 
+  const toggleMic = () => {
+    if (listening) {
+      setListening(false);
+      return;
+    }
+    const lang: SpeechLang = t("common.language") === "语言" ? "zh-CN" : "en-US";
+    const session = startListening({
+      lang,
+      onInterim: (text) => setQuery((current) => `${current ? current : ""}${text}`),
+      onFinalChunk: (text) => setQuery((current) => `${current}${current ? "" : ""}${text}`),
+      onEnd: () => setListening(false)
+    });
+    if (session) {
+      setListening(true);
+      window.setTimeout(() => {
+        session.stop();
+        setListening(false);
+      }, 8000);
+    }
+  };
+
   const launch = () => {
     const text = query.trim();
     if (!text) {
@@ -117,10 +145,25 @@ export function HomePage(props: {
             onKeyDown={(event) => {
               if (event.key === "Enter") launch();
             }}
-            placeholder={t("home.launch.placeholder")}
+            placeholder={listening ? "🎙️ …" : t("home.launch.placeholder")}
             aria-label={t("home.launch.placeholder")}
-            className="flex-1 min-w-[220px] border border-line bg-surface-strong/50 rounded-pill px-5 py-3.5 text-[15px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand placeholder:text-muted/70 transition-colors hover:border-line-strong"
+            className="flex-1 min-w-[200px] border border-line bg-surface-strong/50 rounded-pill px-5 py-3.5 text-[15px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand placeholder:text-muted/70 transition-colors hover:border-line-strong"
           />
+          {voiceSupported && (
+            <button
+              type="button"
+              onClick={toggleMic}
+              aria-label="voice input"
+              aria-pressed={listening}
+              className={`shrink-0 w-[52px] h-[52px] rounded-full border text-xl cursor-pointer transition-all ${
+                listening
+                  ? "border-brand bg-brand-light text-brand animate-pulse"
+                  : "border-line-strong bg-white hover:border-brand/50"
+              }`}
+            >
+              🎙️
+            </button>
+          )}
           <Button onClick={launch} size="lg" className="shrink-0">
             {t("home.launch.button")} ✦
           </Button>
