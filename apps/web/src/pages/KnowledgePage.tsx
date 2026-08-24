@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  createKnowledgeEntry,
   deleteKnowledgeEntry,
   listKnowledgeEntries,
+  smartAddKnowledge,
   type KnowledgeRecord
 } from "../lib/api.js";
 import { useI18n } from "../lib/i18n.js";
+import {
+  isVoiceInputSupported,
+  startListening,
+  type SpeechLang
+} from "../lib/speech.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card.js";
-import { Badge, Input, Label, Skeleton, Textarea } from "../components/ui/Input.js";
+import { Badge, Skeleton } from "../components/ui/Input.js";
 import { EmptyState, ErrorBanner, RouteLayout } from "../components/Layout.js";
 
 type KnowledgeGroup = "manual" | "run" | "ai";
@@ -33,17 +38,19 @@ function groupOf(entry: KnowledgeRecord): KnowledgeGroup {
 }
 
 export function KnowledgePage(props: { workspaceId: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [entries, setEntries] = useState<KnowledgeRecord[]>([]);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [tagsRaw, setTagsRaw] = useState("");
+  const [capture, setCapture] = useState("");
+  const [savingCapture, setSavingCapture] = useState(false);
+  const [lastAdded, setLastAdded] = useState<string | null>(null);
+  const [activeTag, setActiveTag] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [listening, setListening] = useState(false);
+  const voiceSupported = useMemo(() => isVoiceInputSupported(), []);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const items = (await listKnowledgeEntries(props.workspaceId)) as KnowledgeRecord[];
       setEntries(items);
@@ -53,74 +60,96 @@ export function KnowledgePage(props: { workspaceId: string }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.workspaceId]);
 
-  const add = async () => {
-    if (!title.trim() || !content.trim()) return;
-    setSaving(true);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const submitCapture = async () => {
+    const text = capture.trim();
+    if (!text) return;
+    setSavingCapture(true);
+    setError(null);
     try {
-      await createKnowledgeEntry({
-        workspaceId: props.workspaceId,
-        title: title.trim(),
-        content: content.trim(),
-        tags: tagsRaw
-          .split(",")
-          .map((tag) => tag.trim())
-          .filter(Boolean)
-      });
-      setTitle("");
-      setContent("");
-      setTagsRaw("");
+      const created = await smartAddKnowledge({ workspaceId: props.workspaceId, text });
+      setLastAdded(created.title);
+      setCapture("");
+      window.setTimeout(() => setLastAdded(null), 2600);
       await load();
     } catch (addError) {
       setError(addError instanceof Error ? addError.message : t("history.loadError"));
     } finally {
-      setSaving(false);
+      setSavingCapture(false);
     }
   };
 
+  const toggleMic = () => {
+    if (listening) {
+      setListening(false);
+      return;
+    }
+    const lang: SpeechLang = locale === "zh-CN" ? "zh-CN" : "en-US";
+    const session = startListening({
+      lang,
+      onInterim: (text) => setCapture((current) => `${current}${text}`),
+      onFinalChunk: (text) => setCapture((current) => `${current}${text}`),
+      onEnd: () => setListening(false)
+    });
+    if (session) {
+      setListening(true);
+      window.setTimeout(() => {
+        session.stop();
+        setListening(false);
+        void submitCapture();
+      }, 8000);
+    }
+  };
+
+  const tagCloud = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of entries) {
+      for (const tag of entry.tags) {
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }, [entries]);
+
   const filtered = useMemo(() => {
+    let list = entries;
+    if (activeTag) list = list.filter((entry) => entry.tags.includes(activeTag));
     const q = query.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter(
-      (entry) =>
-        entry.title.toLowerCase().includes(q) ||
-        entry.content.toLowerCase().includes(q) ||
-        entry.tags.some((tag) => tag.toLowerCase().includes(q))
-    );
-  }, [entries, query]);
+    if (q) {
+      list = list.filter(
+        (entry) =>
+          entry.title.toLowerCase().includes(q) ||
+          entry.content.toLowerCase().includes(q) ||
+          entry.tags.some((tag) => tag.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [entries, activeTag, query]);
 
   const grouped = useMemo(() => {
     const groups: Record<KnowledgeGroup, KnowledgeRecord[]> = { manual: [], run: [], ai: [] };
-    for (const entry of filtered) {
-      groups[groupOf(entry)].push(entry);
-    }
+    for (const entry of filtered) groups[groupOf(entry)].push(entry);
     return groups;
   }, [filtered]);
 
-  const [refining, setRefining] = useState(false);
-
   const refine = useCallback(async () => {
-    setRefining(true);
     setError(null);
     try {
-      await fetch("/api/knowledge/ai-refine", {
+      const res = await fetch("/api/knowledge/ai-refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId: props.workspaceId })
-      }).then((res) => {
-        if (!res.ok) throw new Error(`refine failed: ${res.status}`);
       });
+      if (!res.ok) throw new Error(`refine failed: ${res.status}`);
       await load();
     } catch (refineError) {
       setError(refineError instanceof Error ? refineError.message : t("history.loadError"));
-    } finally {
-      setRefining(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.workspaceId]);
@@ -129,48 +158,67 @@ export function KnowledgePage(props: { workspaceId: string }) {
     <RouteLayout title={t("knowledge.title")} subtitle={t("knowledge.subtitle")}>
       <ErrorBanner error={error} />
 
-      <Card className="grid gap-3">
-        <Label>
-          <span>{t("knowledge.addTitle")}</span>
-          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="品牌介绍 / 语气规范 / 爆款打法…" />
-        </Label>
-        <Label>
-          <span>{t("knowledge.addContent")}</span>
-          <Textarea
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            className="min-h-[88px]"
-            placeholder="例:我们的客户多为 25-40 岁新手妈妈,重视安全与性价比;语气亲切,多用 emoji,不承诺绝对效果。"
+      <Card className="p-4">
+        <div className="flex gap-2.5 flex-wrap sm:flex-nowrap">
+          <input
+            value={capture}
+            onChange={(event) => setCapture(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && capture.trim()) void submitCapture();
+            }}
+            placeholder={listening ? "...": t("knowledge.capture.placeholder")}
+            aria-label={t("knowledge.capture.placeholder")}
+            className="flex-1 min-w-[200px] border border-line bg-surface-strong/50 rounded-pill px-5 py-3.5 text-[15px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand placeholder:text-muted/70 transition-colors hover:border-line-strong"
           />
-        </Label>
-        <Label>
-          <span>{t("knowledge.addTags")}</span>
-          <Input value={tagsRaw} onChange={(event) => setTagsRaw(event.target.value)} placeholder="品牌, 客群" />
-        </Label>
-        <Button onClick={() => void add()} disabled={saving || !title.trim() || !content.trim()} className="justify-self-start">
-          {saving ? t("setup.launching") : `＋ ${t("knowledge.add")}`}
-        </Button>
+          {voiceSupported && (
+            <button
+              type="button"
+              onClick={toggleMic}
+              aria-label="voice input"
+              aria-pressed={listening}
+              className={`shrink-0 w-[52px] h-[52px] rounded-full border text-xl cursor-pointer transition-all ${
+                listening ? "border-brand bg-brand-light text-brand animate-pulse" : "border-line-strong bg-white hover:border-brand/50"
+              }`}
+            >
+              MIC
+            </button>
+          )}
+          <Button onClick={() => void submitCapture()} disabled={savingCapture || !capture.trim()} size="lg" className="shrink-0">
+            {savingCapture ? "..." : "+"}
+          </Button>
+        </div>
+        <p className="m-0 mt-2 px-1 text-[12px] text-muted flex items-center justify-between gap-2 flex-wrap">
+          <span>{t("knowledge.capture.hint")}</span>
+          {lastAdded && (
+            <span className="text-ok font-semibold">OK {lastAdded}</span>
+          )}
+        </p>
       </Card>
 
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center gap-3 flex-wrap">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="🔍 Search…"
+          placeholder="Search..."
           aria-label="Search knowledge"
-          className="border border-line bg-white rounded-pill px-4 py-2 text-[14px] outline-none focus-visible:outline-2 focus-visible:outline-brand w-full max-w-xs"
+          className="border border-line bg-white rounded-pill px-4 py-2 text-[14px] outline-none focus-visible:outline-2 focus-visible:outline-brand w-full max-w-[240px]"
         />
-        <div className="flex items-center gap-2">
-          <span className="text-[12.5px] text-muted">{t("knowledge.attachedHint")}</span>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => void refine()}
-            disabled={refining || entries.length < 2}
+        {tagCloud.map(([tag, count]) => (
+          <button
+            key={tag}
+            type="button"
+            onClick={() => setActiveTag(activeTag === tag ? null : tag)}
+            aria-pressed={activeTag === tag}
+            className={`text-[12px] font-medium rounded-pill px-2.5 py-1 border cursor-pointer transition-colors ${
+              activeTag === tag ? "border-brand bg-brand-light text-brand" : "border-line-strong bg-white text-muted hover:text-ink"
+            }`}
           >
-            ✨ {refining ? t("setup.launching") : t("knowledge.refine")}
-          </Button>
-        </div>
+            #{tag} x{count}
+          </button>
+        ))}
+        <Button size="sm" variant="secondary" className="ml-auto" onClick={() => void refine()} disabled={entries.length < 2}>
+          {t("knowledge.refine")}
+        </Button>
       </div>
 
       {loading ? (
@@ -195,33 +243,35 @@ export function KnowledgePage(props: { workspaceId: string }) {
                 {t(`knowledge.group.${group}`)}
                 <span className="text-muted font-normal text-[12.5px]">({groupEntries.length})</span>
               </h3>
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {groupEntries.map((entry) => (
-                  <Card key={entry.id} className="glass-hover lift grid gap-2">
-                    <CardHeader>
-                      <CardTitle className="text-[15px] leading-snug">{entry.title}</CardTitle>
+                  <Card key={entry.id} className="glass-hover lift grid gap-1.5 p-4">
+                    <CardHeader className="!mb-1">
+                      <CardTitle className="text-[14.5px] leading-snug">{entry.title}</CardTitle>
                       <Badge variant={groupBadgeVariant(group)}>{group}</Badge>
                     </CardHeader>
-                    <CardContent>
-                      <p className="m-0 text-[13.5px] text-muted leading-relaxed line-clamp-4 whitespace-pre-wrap">
+                    <CardContent className="gap-1.5">
+                      <p className="m-0 text-[13px] text-muted leading-relaxed line-clamp-3 whitespace-pre-wrap">
                         {entry.content}
                       </p>
                       {entry.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-1">
-                          {entry.tags.map((tag) => (
-                            <span
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          {entry.tags.slice(0, 4).map((tag) => (
+                            <button
                               key={tag}
-                              className="text-[11.5px] font-medium text-brand bg-brand-light rounded-pill px-2 py-0.5"
+                              type="button"
+                              onClick={() => setActiveTag(tag)}
+                              className="text-[11px] font-medium text-brand bg-brand-light rounded-pill px-1.5 py-0.5 cursor-pointer border-0"
                             >
                               #{tag}
-                            </span>
+                            </button>
                           ))}
                         </div>
                       )}
-                      <div className="pt-1 flex items-center justify-between">
-                        {entry.runId ? (
-                          <span className="text-[11.5px] text-muted/80">↳ {entry.runId.slice(0, 18)}…</span>
-                        ) : <span />}
+                      <div className="pt-0.5 flex items-center justify-between">
+                        <span className="text-[10.5px] text-muted/70">
+                          {entry.runId ? entry.runId.slice(0, 16) : ""}
+                        </span>
                         <Button
                           size="sm"
                           variant="ghost"

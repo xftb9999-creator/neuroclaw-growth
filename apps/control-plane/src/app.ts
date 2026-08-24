@@ -160,6 +160,25 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
     }
   );
 
+  // J8: one-line smart capture
+  const smartCaptureSchema = z.object({
+    workspaceId: z.string().min(1),
+    text: z.string().min(2)
+  });
+  api.post(
+    "/knowledge/smart",
+    requirePermission("memory:write"),
+    zodValidator("json", smartCaptureSchema),
+    async (c) => {
+      try {
+        const { workspaceId, text } = c.req.valid("json");
+        return c.json(await service.smartAddKnowledge(workspaceId, text), 201);
+      } catch (error) {
+        return handleError(error, c);
+      }
+    }
+  );
+
   // J7: playbooks — editable workflows
   api.get("/playbooks", requirePermission("template:read"), async (c) => {
     return c.json(await service.getPlaybooks());

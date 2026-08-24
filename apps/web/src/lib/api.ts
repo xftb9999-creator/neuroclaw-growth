@@ -224,6 +224,19 @@ export function deleteKnowledgeEntry(entryId: string) {
   return request(`/api/knowledge/${entryId}`, { method: "DELETE" });
 }
 
+/** J8: 一行智能捕获 — LLM 自动结构化为 title/content/tags */
+export function smartAddKnowledge(payload: { workspaceId: string; text: string }) {
+  return request<{ id: string; title: string; tags: string[] }>("/api/knowledge/smart", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function searchKnowledge(workspaceId: string, q?: string) {
+  const query = q ? `&q=${encodeURIComponent(q)}` : "";
+  return request(`/api/knowledge/search?workspaceId=${encodeURIComponent(workspaceId)}${query}`);
+}
+
 // ---------------------------------------------------------------------------
 // Approval inbox + Schedules (J4)
 // ---------------------------------------------------------------------------
@@ -289,6 +302,10 @@ export interface TeamStepView {
   state: "done" | "running" | "waiting_approval" | "failed" | "pending";
   runId?: string;
   outputSummary?: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationSec?: number | null;
+  outputFields?: Record<string, string>;
 }
 
 export interface TeamRunRecord {
@@ -300,6 +317,21 @@ export interface TeamRunRecord {
   status: "running" | "waiting_approval" | "completed" | "failed";
   currentStep: number;
   steps: TeamStepView[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamListItem {
+  id: string;
+  playbookKey: string;
+  goal: string;
+  status: string;
+  currentStep: number;
+  createdAt: string;
+}
+
+export function listTeams(workspaceId: string) {
+  return request<TeamListItem[]>(`/api/teams?workspaceId=${encodeURIComponent(workspaceId)}`);
 }
 
 export function launchTeam(payload: {

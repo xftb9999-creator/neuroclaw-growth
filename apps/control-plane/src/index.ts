@@ -690,6 +690,62 @@ export class ControlPlaneService {
     );
   }
 
+  /**
+   * J8:一行智能捕获 — LLM 把一句话解析成 {title, content, tags};
+   * 无 LLM 时规则切分(逗号/句号分段)。返回创建的条目。
+   */
+  async smartAddKnowledge(workspaceId: string, text: string) {
+    const trimmed = text.trim();
+    let title = trimmed.slice(0, 20);
+    let content = trimmed;
+    let tags: string[] = [];
+    let source: "manual" | "ai" = "manual";
+
+    try {
+      const result = await generateStructuredForAgent({
+        persona:
+          "You are a knowledge-capture assistant. The user gives one casual line about their business; you extract a compact structured knowledge entry.",
+        instruction:
+          "Extract: title (≤16 chars, noun phrase), content (the full fact, cleaned, keep original language), tags (2-4 short labels).",
+        fields: [
+          { name: "title", type: "string", required: true },
+          { name: "content", type: "string", required: true },
+          { name: "tags", type: "string[]", required: true }
+        ],
+        input: { text: trimmed }
+      });
+
+      const llmTitle = String(result.title ?? "").trim();
+      const llmContent = String(result.content ?? "").trim();
+      const llmTags = Array.isArray(result.tags)
+        ? result.tags.map(String).map((tag) => tag.trim()).filter(Boolean).slice(0, 4)
+        : [];
+
+      if (llmTitle) title = llmTitle.slice(0, 24);
+      if (llmContent) content = llmContent;
+      tags = llmTags;
+      if (llmTags.length > 0) source = "ai";
+    } catch {
+      // LLM 不可用 → 规则切分:第一段做标题,全文做内容
+      const segments = trimmed.split(/[，。,.;；]/).map((part) => part.trim()).filter(Boolean);
+      if (segments.length > 0) title = segments[0].slice(0, 20);
+      tags = [];
+    }
+
+    const id = `kn_${randomUUID()}`;
+    await this.db.insert(knowledgeEntries).values({
+      id,
+      workspaceId,
+      title,
+      content,
+      tags: JSON.stringify(tags),
+      source,
+      createdAt: new Date().toISOString()
+    });
+
+    return { id, title, tags };
+  }
+
   /** J7:AI 提炼 — 把近期条目蒸馏为一条「品牌速览」(source='ai');无 LLM 时规则拼接 */
   async refineKnowledgeWithAI(workspaceId: string) {
     const entries = await this.listKnowledgeEntries(workspaceId);
@@ -1236,26 +1292,52 @@ export class ControlPlaneService {
       audience: team.audience,
       status: team.status,
       currentStep: team.currentStep,
-      steps: steps.map((step, index) => ({
-        ...step,
-        state:
-          index < team.currentStep
-            ? "done"
-            : index === team.currentStep
-              ? team.status === "completed"
-                ? "done"
-                : team.status
-              : "pending",
-        runId: runIds[index],
-        outputSummary: (() => {
-          const run = runIds[index] ? runsById.get(runIds[index]) : undefined;
-          if (!run?.outputPayload) return undefined;
-          const values = Object.values(run.outputPayload);
-          const firstList = values.find((value) => Array.isArray(value)) as string[] | undefined;
-          const firstString = values.find((value) => typeof value === "string") as string | undefined;
-          return (firstList?.join(" / ") ?? firstString ?? "").slice(0, 120);
-        })()
-      }))
+      steps: steps.map((step, index) => {
+        const stepRunId = runIds[index];
+        const stepRun = stepRunId ? runsById.get(stepRunId) : undefined;
+        let durationSec: number | null = null;
+        if (stepRun?.startedAt && stepRun?.completedAt) {
+          const startMs = Date.parse(stepRun.startedAt);
+          const endMs = Date.parse(stepRun.completedAt);
+          if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs >= startMs) {
+            durationSec = Math.round((endMs - startMs) / 1000);
+          }
+        }
+
+        const outputFields: Record<string, string> = {};
+        if (stepRun?.outputPayload) {
+          for (const [key, value] of Object.entries(stepRun.outputPayload)) {
+            outputFields[key] = Array.isArray(value)
+              ? value.join("; ")
+              : String(value);
+          }
+        }
+
+        return {
+          ...step,
+          state:
+            index < team.currentStep
+              ? "done"
+              : index === team.currentStep
+                ? team.status === "completed"
+                  ? "done"
+                  : team.status
+                : "pending",
+          runId: stepRunId,
+          startedAt: stepRun?.startedAt,
+          completedAt: stepRun?.completedAt,
+          durationSec,
+          outputSummary: (() => {
+            const values = Object.values(stepRun?.outputPayload ?? {});
+            const firstList = values.find((value) => Array.isArray(value)) as string[] | undefined;
+            const firstString = values.find((value) => typeof value === "string") as string | undefined;
+            return (firstList?.join(" / ") ?? firstString ?? "").slice(0, 120);
+          })(),
+          outputFields
+        };
+      }),
+      createdAt: team.createdAt,
+      updatedAt: team.updatedAt
     };
   }
 
