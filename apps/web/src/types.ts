@@ -79,6 +79,7 @@ export type Route =
   | { name: "team" }
   | { name: "inbox" }
   | { name: "schedule" }
+  | { name: "analytics" }
   | { name: "history" }
   | { name: "memory" }
   | { name: "run-setup"; templateType: TemplateType }

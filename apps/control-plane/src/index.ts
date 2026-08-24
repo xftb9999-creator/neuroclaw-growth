@@ -1054,6 +1054,87 @@ export class ControlPlaneService {
     }));
   }
 
+  // -------------------------------------------------------------------------
+  // Run analytics (J6) — trends / success rate / per-agent breakdown
+  // -------------------------------------------------------------------------
+
+  async getAnalyticsOverview(workspaceId: string, days = 14) {
+    await this.assertWorkspaceExists(workspaceId);
+    const rows = await this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.workspaceId, workspaceId));
+
+    const dayBuckets = new Map<string, { total: number; completed: number; failed: number }>();
+    const today = new Date();
+    const labels: Array<{ key: string; label: string }> = [];
+    for (let offset = days - 1; offset >= 0; offset -= 1) {
+      const day = new Date(today.getTime() - offset * 86_400_000);
+      const key = day.toISOString().slice(0, 10);
+      labels.push({ key, label: `${day.getMonth() + 1}/${day.getDate()}` });
+      dayBuckets.set(key, { total: 0, completed: 0, failed: 0 });
+    }
+
+    let completedCount = 0;
+    let failedCount = 0;
+    let waitingCount = 0;
+    let durationTotalMs = 0;
+    let durationSamples = 0;
+    const byAgent = new Map<string, number>();
+
+    for (const row of rows) {
+      const run = rowToRun(row);
+      const dayKey = (run.createdAt ?? "").slice(0, 10);
+      const bucket = dayBuckets.get(dayKey);
+
+      if (bucket) {
+        bucket.total += 1;
+        if (run.status === "completed") bucket.completed += 1;
+        if (run.status === "failed") bucket.failed += 1;
+      }
+
+      byAgent.set(run.templateType, (byAgent.get(run.templateType) ?? 0) + 1);
+
+      if (run.status === "completed") {
+        completedCount += 1;
+        if (run.startedAt && run.completedAt) {
+          const started = Date.parse(run.startedAt);
+          const endedAt = Date.parse(run.completedAt);
+          if (!Number.isNaN(started) && !Number.isNaN(endedAt) && endedAt >= started) {
+            durationTotalMs += endedAt - started;
+            durationSamples += 1;
+          }
+        }
+      } else if (run.status === "failed") {
+        failedCount += 1;
+      } else if (run.status === "waiting_approval") {
+        waitingCount += 1;
+      }
+    }
+
+    const finished = completedCount + failedCount;
+    const successRate = finished > 0 ? Math.round((completedCount / finished) * 100) : null;
+
+    return {
+      windowDays: days,
+      series: labels.map(({ key, label }) => ({
+        label,
+        ...(dayBuckets.get(key) ?? { total: 0, completed: 0, failed: 0 })
+      })),
+      totals: {
+        all: rows.length,
+        completed: completedCount,
+        failed: failedCount,
+        waiting: waitingCount
+      },
+      successRate,
+      avgDurationSec: durationSamples > 0 ? Math.round(durationTotalMs / durationSamples / 1000) : null,
+      byAgent: [...byAgent.entries()]
+        .map(([type, count]) => ({ type, count }))
+        .sort((a, b) => b.count - a.count)
+    };
+  }
+
   private async assertWorkspaceExists(workspaceId: string): Promise<void> {
     const rows = await this.db.select().from(workspaces)
       .where(eq(workspaces.id, workspaceId));

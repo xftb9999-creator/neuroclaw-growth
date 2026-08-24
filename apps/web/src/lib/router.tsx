@@ -14,6 +14,7 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/team") return { name: "team" };
   if (pathname === "/inbox") return { name: "inbox" };
   if (pathname === "/schedule") return { name: "schedule" };
+  if (pathname === "/analytics") return { name: "analytics" };
   if (pathname === "/history") return { name: "history" };
   if (pathname === "/memory") return { name: "memory" };
 

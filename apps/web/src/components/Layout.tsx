@@ -80,6 +80,9 @@ export function RouteLayout(props: { title: string; subtitle: string; children: 
               <Button variant="ghost" onClick={() => navigate("/home")}>
                 {t("common.nav.home")}
               </Button>
+              <Button variant="ghost" onClick={() => navigate("/analytics")}>
+                {t("common.nav.analytics")}
+              </Button>
               <Button variant="ghost" onClick={() => navigate("/templates")}>
                 {t("common.nav.templates")}
               </Button>

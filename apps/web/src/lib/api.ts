@@ -310,3 +310,22 @@ export function pickPlanner(goal: string) {
     body: JSON.stringify({ goal })
   });
 }
+
+// ---------------------------------------------------------------------------
+// Run analytics (J6)
+// ---------------------------------------------------------------------------
+
+export interface AnalyticsOverview {
+  windowDays: number;
+  series: Array<{ label: string; total: number; completed: number; failed: number }>;
+  totals: { all: number; completed: number; failed: number; waiting: number };
+  successRate: number | null;
+  avgDurationSec: number | null;
+  byAgent: Array<{ type: string; count: number }>;
+}
+
+export function getAnalyticsOverview(workspaceId: string, days = 14) {
+  return request<AnalyticsOverview>(
+    `/api/analytics/overview?workspaceId=${encodeURIComponent(workspaceId)}&days=${days}`
+  );
+}

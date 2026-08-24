@@ -3,6 +3,7 @@ import { cloneRun } from "./lib/api.js";
 import { clearRunDraft, clearWorkspaceId, navigate, parseRoute, readWorkspaceId, writeRunDraft, writeWorkspaceId } from "./lib/router.js";
 import { AgentBuilderPage } from "./pages/AgentBuilderPage.js";
 import { AgentsSquarePage } from "./pages/AgentsSquarePage.js";
+import { AnalyticsPage } from "./pages/AnalyticsPage.js";
 import { BrandProfilePage } from "./pages/BrandProfilePage.js";
 import { HistoryPage } from "./pages/HistoryPage.js";
 import { HomePage } from "./pages/HomePage.js";
@@ -71,6 +72,8 @@ export function App() {
     return <InboxPage workspaceId={workspaceId} onOpenRun={(id) => go(`/runs/${id}`)} />;
   if (route.name === "schedule")
     return <SchedulePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
+  if (route.name === "analytics")
+    return <AnalyticsPage workspaceId={workspaceId} />;
   if (route.name === "profile")
     return <BrandProfilePage workspaceId={workspaceId} onWorkspaceMissing={recover} />;
   if (route.name === "history")

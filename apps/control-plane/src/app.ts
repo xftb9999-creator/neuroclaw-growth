@@ -265,6 +265,20 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
     }
   });
 
+  // Run analytics (J6)
+  api.get("/analytics/overview", requirePermission("run:read"), async (c) => {
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId) {
+      return c.json({ message: "workspaceId is required" }, 400);
+    }
+    const days = Number(c.req.query("days") ?? 14);
+    try {
+      return c.json(await service.getAnalyticsOverview(workspaceId, Math.min(60, Math.max(7, days))));
+    } catch (error) {
+      return handleError(error, c);
+    }
+  });
+
   // LLM Planner — route a goal to the best-fit agent (J5-B)
   const plannerSchema = z.object({ goal: z.string().min(1) });
 
