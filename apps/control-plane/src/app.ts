@@ -561,6 +561,10 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
   if (staticDir) {
     app.use(
       "/assets/*",
+      async (c, next) => {
+        await next();
+        c.header("Cache-Control", "public, max-age=31536000, immutable");
+      },
       serveStatic({ root: staticDir, rewriteRequestPath: (p) => p.replace(/^\/assets/, "/assets") })
     );
     app.get("*", async (c) => {
@@ -570,17 +574,27 @@ export function createApp(service: ControlPlaneService, staticDir?: string) {
       const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
       const filePath = path.resolve(staticDir, `.${requestedPath}`);
 
+      // 防陈旧:index.html 永远协商缓存(重建后立即生效);
+      // 带哈希的 assets 内容不变可长缓存。
+      const isHtml = requestedPath === "/index.html" || !path.extname(requestedPath);
+      const cacheControl = isHtml
+        ? "no-cache, must-revalidate"
+        : "public, max-age=31536000, immutable";
+
       try {
         const content = await readFile(filePath);
         const mime = getMimeType(filePath);
         return new Response(content, {
-          headers: { "Content-Type": mime }
+          headers: { "Content-Type": mime, "Cache-Control": cacheControl }
         });
       } catch {
         try {
           const indexHtml = await readFile(path.join(staticDir, "index.html"));
           return new Response(indexHtml, {
-            headers: { "Content-Type": "text/html; charset=utf-8" }
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-cache, must-revalidate"
+            }
           });
         } catch {
           return c.json({ message: "Static asset not found", code: "STATIC_NOT_FOUND" }, 404);
