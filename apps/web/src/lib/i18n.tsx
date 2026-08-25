@@ -177,6 +177,10 @@ const zhCN: Dictionary = {
   "team.recent": "近期团队",
   "team.newRelay": "发起新接力",
   "team.stepDetail": "环节详情",
+  "team.stage.pick": "选玩法",
+  "team.stage.goal": "定目标",
+  "team.stage.relay": "接力执行",
+  "team.stage.results": "收结果",
   "knowledge.capture.placeholder": "一句话添加:客群是谁、卖点、语气偏好…(回车保存)",
   "knowledge.capture.hint": "AI 自动结构化为标题+标签;运行成果也会自动沉淀到「运行自动沉淀」区",
 
@@ -485,6 +489,10 @@ const enUS: Dictionary = {
   "team.recent": "Recent teams",
   "team.newRelay": "New relay",
   "team.stepDetail": "Stage detail",
+  "team.stage.pick": "Playbook",
+  "team.stage.goal": "Goal",
+  "team.stage.relay": "Relay",
+  "team.stage.results": "Results",
   "knowledge.capture.placeholder": "One line: who's your customer, key selling point, tone… (Enter to save)",
   "knowledge.capture.hint": "AI structures it into title + tags; run outputs also auto-deposit below",
 
