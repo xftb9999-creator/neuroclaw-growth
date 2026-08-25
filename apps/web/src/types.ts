@@ -78,6 +78,8 @@ export type Route =
   | { name: "library" }
   | { name: "knowledge" }
   | { name: "team" }
+  | { name: "team-detail"; teamId: string }
+  | { name: "team-results"; teamId: string }
   | { name: "inbox" }
   | { name: "schedule" }
   | { name: "analytics" }

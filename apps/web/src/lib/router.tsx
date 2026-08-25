@@ -13,6 +13,10 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/library") return { name: "library" };
   if (pathname === "/knowledge") return { name: "knowledge" };
   if (pathname === "/team") return { name: "team" };
+  const teamResultsMatch = pathname.match(/^\/team\/([^/]+)\/results$/);
+  if (teamResultsMatch) return { name: "team-results", teamId: teamResultsMatch[1] };
+  const teamDetailMatch = pathname.match(/^\/team\/([^/]+)$/);
+  if (teamDetailMatch) return { name: "team-detail", teamId: teamDetailMatch[1] };
   if (pathname === "/inbox") return { name: "inbox" };
   if (pathname === "/schedule") return { name: "schedule" };
   if (pathname === "/analytics") return { name: "analytics" };

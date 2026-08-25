@@ -34,6 +34,7 @@ const zhCN: Dictionary = {
   "common.nav.workspace": "工作区",
   "common.language": "语言",
   "common.loading": "加载中…",
+  "common.back": "返回",
 
   "home.title": "增长工作台",
   "home.subtitle": "一句话启动 AI 员工，成果自动沉淀为可复用资产。",
@@ -346,6 +347,7 @@ const enUS: Dictionary = {
   "common.nav.workspace": "Workspace",
   "common.language": "Language",
   "common.loading": "Loading…",
+  "common.back": "Back",
 
   "home.title": "Growth Workspace",
   "home.subtitle": "Launch AI employees with one sentence — outputs become reusable assets.",

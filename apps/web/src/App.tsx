@@ -71,6 +71,10 @@ export function App() {
     return <KnowledgePage workspaceId={workspaceId} />;
   if (route.name === "team")
     return <TeamPage workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
+  if (route.name === "team-detail")
+    return <TeamPage key={route.teamId} teamId={route.teamId} focus="pipeline" workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
+  if (route.name === "team-results")
+    return <TeamPage key={`r-${route.teamId}`} teamId={route.teamId} focus="results" workspaceId={workspaceId} onWorkspaceMissing={recover} onOpenRun={(id) => go(`/runs/${id}`)} />;
   if (route.name === "inbox")
     return <InboxPage workspaceId={workspaceId} onOpenRun={(id) => go(`/runs/${id}`)} />;
   if (route.name === "schedule")

@@ -85,6 +85,9 @@ export function RunStatusPage(props: {
                 {run.failureReason ?? t("status.readyForReview")}
               </p>
               <div className="flex flex-wrap gap-2">
+                <Button variant="ghost" onClick={() => window.history.back()} aria-label={t("common.back")}>
+                  ← {t("common.back")}
+                </Button>
                 <Button data-testid="refresh-run" variant="outline" onClick={() => void load()}>
                   {t("status.refresh")}
                 </Button>

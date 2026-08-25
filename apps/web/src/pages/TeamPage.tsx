@@ -8,6 +8,7 @@ import {
   type TeamRunRecord,
   type TeamStepView
 } from "../lib/api.js";
+import { navigate } from "../lib/router.js";
 import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card.js";
@@ -33,21 +34,34 @@ function stageIcon(stage: Stage): string {
 
 export function TeamPage(props: {
   workspaceId: string;
+  /** 路由驱动:/team/:id(执行视图)或 /team/:id/results(结果视图);缺省 = 根列表 */
+  teamId?: string;
+  focus?: "pipeline" | "results";
   onWorkspaceMissing: (message: string) => void;
   onOpenRun: (runId: string) => void;
 }) {
   const { t } = useI18n();
-  const [stage, setStage] = useState<Stage>(1);
+  const [stage, setStage] = useState<Stage>(() => (props.focus === "results" ? 4 : props.teamId ? 3 : 1));
   const [playbookKey, setPlaybookKey] = useState<string>("sprint");
   const [goal, setGoal] = useState("");
   const [audience, setAudience] = useState("");
-  const [teamRunId, setTeamRunId] = useState<string | null>(null);
+  const [teamRunId, setTeamRunId] = useState<string | null>(props.teamId ?? null);
   const [team, setTeam] = useState<TeamRunRecord | null>(null);
   const [recentTeams, setRecentTeams] = useState<TeamListItem[]>([]);
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
-  const [loadingRoot, setLoadingRoot] = useState(true);
+  const [loadingRoot, setLoadingRoot] = useState(Boolean(props.teamId));
+  const [completedSeen, setCompletedSeen] = useState(false);
+
+  // 阶段导航 = 真实路由跳转(浏览器前进/后退可用)
+  const goStageRoute = useCallback((target: Stage) => {
+    if (target === 1) navigate("/team");
+    else if (teamRunId && target === 3) navigate(`/team/${teamRunId}`);
+    else if (teamRunId && target === 4) navigate(`/team/${teamRunId}/results`);
+    else if (target === 2) navigate("/team"); // 未启动时②与①同页(表单内联)
+    setStage(target);
+  }, [teamRunId]);
 
   const loadRoot = useCallback(async () => {
     try {
@@ -81,16 +95,24 @@ export function TeamPage(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props]);
 
+  // 路由带 teamId:加载团队(执行/结果视图)
   useEffect(() => {
-    if (!teamRunId || !team) return;
-    if (team.status === "completed" || team.status === "failed") return;
+    if (!props.teamId) return;
+    setTeamRunId(props.teamId);
+    void refreshTeam(props.teamId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.teamId]);
+
+  // 团队运行中轮询 — 只刷新数据,绝不强制切换阶段
+  useEffect(() => {
+    if (!teamRunId) return;
+    if (team && (team.status === "completed" || team.status === "failed")) return;
     const timer = window.setInterval(async () => {
-      const record = await refreshTeam(teamRunId);
-      if (record?.status === "completed") setStage(4);
+      await refreshTeam(teamRunId);
     }, 2500);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamRunId, team?.status]);
+  }, [teamRunId, team?.status, refreshTeam]);
 
   const startRelay = async () => {
     if (!goal.trim()) return;
@@ -107,6 +129,7 @@ export function TeamPage(props: {
       const record = await getTeam(result.teamRunId);
       setTeam(record);
       setExpandedStep(record.currentStep ?? 0);
+      navigate(`/team/${result.teamRunId}`);
       setStage(3);
       void loadRoot();
     } catch (startError) {
@@ -144,9 +167,9 @@ export function TeamPage(props: {
 
   const stages: Array<{ id: Stage; label: string; enabled: boolean }> = [
     { id: 1, label: t("team.stage.pick"), enabled: true },
-    { id: 2, label: t("team.stage.goal"), enabled: true },
+    { id: 2, label: t("team.stage.goal"), enabled: !teamRunId },
     { id: 3, label: t("team.stage.relay"), enabled: Boolean(teamRunId) },
-    { id: 4, label: t("team.stage.results"), enabled: Boolean(team && team.status === "completed") }
+    { id: 4, label: t("team.stage.results"), enabled: Boolean(teamRunId) }
   ];
 
   const participants = useMemo(() => {
