@@ -32,6 +32,9 @@
       "@neuroclaw/tooling-mcp": [
         "./packages/tooling-mcp/src/index.ts"
       ],
+      "@neuroclaw/agent-workforce-contract": [
+        "./packages/agent-workforce-contract/src/index.ts"
+      ],
       "@neuroclaw/runtime-worker": [
         "./apps/runtime-worker/src/index.ts"
       ],

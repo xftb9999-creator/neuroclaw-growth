@@ -28,6 +28,9 @@
                            "path":  "./packages/tooling-mcp/tsconfig.json"
                        },
                        {
+                           "path":  "./packages/agent-workforce-contract/tsconfig.json"
+                       },
+                       {
                            "path":  "./apps/runtime-worker/tsconfig.json"
                        },
                        {

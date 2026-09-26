@@ -31,6 +31,9 @@ export default defineConfig({
       "@neuroclaw/tooling-mcp": fileURLToPath(
         new URL("./packages/tooling-mcp/src/index.ts", import.meta.url)
       ),
+      "@neuroclaw/agent-workforce-contract": fileURLToPath(
+        new URL("./packages/agent-workforce-contract/src/index.ts", import.meta.url)
+      ),
       "@neuroclaw/runtime-worker": fileURLToPath(
         new URL("./apps/runtime-worker/src/index.ts", import.meta.url)
       ),
