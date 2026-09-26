@@ -1,12 +1,22 @@
-import { drizzle } from "drizzle-orm/libsql";
-import { createClient, type Client } from "@libsql/client";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
+import { Pool, types as pgTypes } from "pg";
+import { PGlite } from "@electric-sql/pglite";
+import { vector as pgvectorExtension } from "@electric-sql/pglite-pgvector";
 import { sql } from "drizzle-orm";
 
 import * as schema from "./schema.js";
+import { runMigrations } from "./migrations.js";
 
 export {
   workspaces,
+  workspaceMembers,
   runs,
+  workItems,
+  attempts,
+  replayCheckpoints,
+  universalAuditEvents,
+  auditEventRecords,
   approvalRequests,
   memoryRecords,
   auditEvents,
@@ -17,181 +27,110 @@ export {
   knowledgeEntries,
   schedules,
   teamRuns,
-  playbooks
+  playbooks,
+  subscriptions,
+  usageCounters,
+  productEvents,
+  outboxEvents,
+  runEvents,
+  workflowDefinitions,
+  projectPackRegistry,
+  packRegistry,
+  adapterRegistry,
+  adapterManifests,
+  teams,
+  teamMembers,
+  industryBenchmarks
 } from "./schema.js";
+
+export {
+  evidenceRecords,
+  evidences,
+  receipts,
+  taskReceipts,
+  metricDefinitions,
+  metricObservations
+} from "./schema.js";
+
+export {
+  runMigrations,
+  rollbackMigration,
+  MIGRATIONS,
+  type Migration
+} from "./migrations.js";
+export { schema };
 
 export interface CreateDbOptions {
   url?: string;
-  authToken?: string;
   applyMigrations?: boolean;
 }
 
-const DDL_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS workspaces (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    plan TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    template_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    input TEXT NOT NULL,
-    output_payload TEXT,
-    failure_reason TEXT,
-    current_step TEXT,
-    approval_status TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    started_at TEXT,
-    completed_at TEXT,
-    step_results TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS audit_events (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT,
-    actor_id TEXT,
-    action TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_id TEXT,
-    metadata TEXT,
-    created_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS approval_requests (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    action_type TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL,
-    requested_at TEXT NOT NULL,
-    resolved_at TEXT,
-    resolution TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS memory_records (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    template_type TEXT NOT NULL,
-    type TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    source_run_id TEXT NOT NULL,
-    is_pinned INTEGER NOT NULL,
-    is_suppressed INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS jobs (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    payload TEXT,
-    max_attempts INTEGER NOT NULL DEFAULT 3,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at TEXT,
-    last_error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    claimed_at TEXT,
-    completed_at TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS job_attempts (
-    id TEXT PRIMARY KEY,
-    job_id TEXT NOT NULL,
-    attempt_number INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    error TEXT,
-    started_at TEXT NOT NULL,
-    completed_at TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS agents (
-    id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    base_engine TEXT NOT NULL,
-    persona TEXT NOT NULL,
-    description TEXT,
-    focus_areas TEXT,
-    output_style TEXT NOT NULL DEFAULT 'structured',
-    tool_names TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS artifacts (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    agent_type TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    title TEXT NOT NULL,
-    summary TEXT,
-    content_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_entries (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tags TEXT,
-    source TEXT NOT NULL DEFAULT 'manual',
-    run_id TEXT,
-    created_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS playbooks (
-    key TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    steps_json TEXT NOT NULL,
-    builtin INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS schedules (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    template_type TEXT NOT NULL,
-    label TEXT NOT NULL,
-    input_json TEXT NOT NULL,
-    interval_minutes INTEGER NOT NULL DEFAULT 1440,
-    next_run_at TEXT NOT NULL,
-    last_run_id TEXT,
-    last_status TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS team_runs (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    playbook_key TEXT NOT NULL,
-    goal TEXT NOT NULL,
-    audience TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'running',
-    current_step INTEGER NOT NULL DEFAULT 0,
-    steps_json TEXT NOT NULL,
-    run_ids_json TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`
-];
+type NodePgDatabase = ReturnType<typeof drizzle>;
+type PgliteDatabase = ReturnType<typeof drizzlePglite>;
 
-function createDrizzleInstance(options: CreateDbOptions = {}) {
-  const url = options.url ?? process.env.DATABASE_URL ?? ":memory:";
-  const client: Client = createClient({
-    url,
-    authToken: options.authToken
-  });
-  return drizzle(client, { schema });
+/**
+ * Facade type: the app is written against the node-postgres drizzle shape;
+ * PGlite instances are API-compatible for every call site we use and are
+ * cast at the creation boundary (ADR-56 Appendix A).
+ */
+export type Database = NodePgDatabase;
+
+// ---------------------------------------------------------------------------
+// Temporal read contract (Round O / ADR-56 Appendix B)
+//
+// Physical columns are TIMESTAMPTZ; the application keeps its ISO-8601 UTC
+// string contract. node-postgres returns Date objects for timestamptz unless
+// told otherwise — these global parsers normalize every read to ISO so all
+// existing string handling (slice/Date.parse/comparison) stays valid.
+// ---------------------------------------------------------------------------
+
+let parsersInstalled = false;
+function installPgTypeParsers(): void {
+  if (parsersInstalled) return;
+  const iso = (value: string): string => new Date(value).toISOString();
+  pgTypes.setTypeParser(pgTypes.builtins.TIMESTAMPTZ, iso);
+  pgTypes.setTypeParser(pgTypes.builtins.TIMESTAMP, iso);
+  // count(*) comes back as int8/string — normalize for arithmetic.
+  pgTypes.setTypeParser(pgTypes.builtins.INT8, (value) => Number(value));
+  parsersInstalled = true;
 }
 
-export type Database = ReturnType<typeof createDrizzleInstance>;
+function resolveUrl(options: CreateDbOptions): string {
+  return options.url ?? process.env.DATABASE_URL ?? ":memory:";
+}
+
+function createDrizzleInstance(options: CreateDbOptions = {}): Database {
+  const url = resolveUrl(options);
+
+  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
+    installPgTypeParsers();
+    const pool = new Pool({ connectionString: url });
+    return drizzle(pool as never, { schema }) as Database;
+  }
+
+  // PGlite (embedded Postgres) — load the pgvector extension so migration
+  // 0003 applies identically locally and in CI.
+  if (url === ":memory:") {
+    const client = new PGlite({ extensions: { vector: pgvectorExtension } });
+    return drizzlePglite(client as never, { schema }) as unknown as Database;
+  }
+
+  if (url.startsWith("file:")) {
+    const dataDir = url.slice("file:".length) || "./data/neuroclaw-pg";
+    const client = new PGlite(dataDir, { extensions: { vector: pgvectorExtension } });
+    return drizzlePglite(client as never, { schema }) as unknown as Database;
+  }
+
+  throw new Error(
+    `Unsupported DATABASE_URL '${url}'. Use postgres://… (production), file:./path (embedded local) or :memory: (tests).`
+  );
+}
 
 export async function createDb(options: CreateDbOptions = {}): Promise<Database> {
   const db = createDrizzleInstance(options);
 
   if (options.applyMigrations ?? true) {
-    for (const statement of DDL_STATEMENTS) {
-      await db.run(sql.raw(statement));
-    }
+    await runMigrations(db);
   }
 
   return db;
@@ -202,12 +141,16 @@ export async function createInMemoryDb(): Promise<Database> {
 }
 
 /**
- * Close the underlying libSQL client of a Drizzle database instance.
- * Safe to call on already-closed or in-memory databases.
+ * Close the underlying client of a Drizzle database instance.
+ * Handles both node-postgres Pool (.end) and PGlite (.close).
  */
 export async function closeDatabase(db: Database): Promise<void> {
-  const client = (db as unknown as { $client?: { close?: () => void } }).$client;
-  if (client && typeof client.close === "function") {
-    client.close();
+  const client = (db as unknown as { $client?: { end?: () => unknown; close?: () => unknown } })
+    .$client;
+  if (!client) return;
+  if (typeof client.close === "function") {
+    await client.close();
+  } else if (typeof client.end === "function") {
+    await client.end();
   }
 }
