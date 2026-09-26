@@ -77,12 +77,15 @@ describe("W3: POST /api/integration/validate", () => {
     const body = (await res.json()) as {
       contractVersion: string;
       bundle: SimulationProjectIntegrationBundle;
-      adapterInput: { simulationOnly: boolean; writeScopes: string[] };
+      adapterInput: { simulationOnly: boolean; writeScopes: string[] } & Record<string, unknown>;
     };
     expect(body.contractVersion).toBe("1.0.0");
     expect(body.bundle.projectKey).toBe("w3_validate");
     expect(body.adapterInput.simulationOnly).toBe(true);
     expect(body.adapterInput.writeScopes).toEqual([]);
+    // I-039: validate mirrors GET /adapters — no hard-coded fixture health constants.
+    expect(body.adapterInput).not.toHaveProperty("readiness");
+    expect(body.adapterInput).not.toHaveProperty("evidenceAt");
     expect(() => assertSimulationProjectIntegrationConsistency(body.bundle)).not.toThrow();
   });
 

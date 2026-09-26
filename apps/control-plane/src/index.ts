@@ -5790,15 +5790,23 @@ export class ControlPlaneService {
    * Validates one simulation integration config through the shared kernel and
    * returns the derived bundle plus the adapter input projection. Throws the
    * kernel's own message when any fail-closed rule rejects the config.
+   *
+   * The projection strips the same hard-coded `readiness`/`evidenceAt` fixture
+   * constants as `GET /api/integration/adapters`, so both routes expose one
+   * consistent adapter shape (I-039).
    */
   validateSimulationIntegration(input: SimulationProjectIntegrationConfigInput): {
     contractVersion: string;
     bundle: SimulationProjectIntegrationBundle;
-    adapterInput: SimulationAdapterInput;
+    adapterInput: SimulationAdapterInputView;
   } {
     const bundle = buildSimulationProjectIntegration(input);
     const [adapterInput] = buildSimulationAdapterInputs({ [bundle.projectKey]: bundle.adapter });
-    return { contractVersion: INTEGRATION_CONTRACT_VERSION, bundle, adapterInput };
+    return {
+      contractVersion: INTEGRATION_CONTRACT_VERSION,
+      bundle,
+      adapterInput: stripAdapterHealthFields(adapterInput)
+    };
   }
 
   /**
