@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+﻿import { randomUUID } from "node:crypto";
 import { eq, desc } from "drizzle-orm";
 
 import type { TemplateType } from "@neuroclaw/shared";
@@ -20,6 +20,8 @@ export interface MemoryRecord {
   sourceRunId: string;
   isPinned: boolean;
   isSuppressed: boolean;
+  /** P1 Crew: 'private' | 'team' — team-visible records readable by workspace members. */
+  visibility: "private" | "team";
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +53,7 @@ function rowToRecord(row: MemoryRow): MemoryRecord {
     sourceRunId: row.sourceRunId,
     isPinned: row.isPinned,
     isSuppressed: row.isSuppressed,
+    visibility: (row.visibility as MemoryRecord["visibility"]) ?? "private",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
@@ -69,6 +72,7 @@ export class DrizzleMemoryStore implements MemoryStore {
       sourceRunId: record.sourceRunId,
       isPinned: record.isPinned,
       isSuppressed: record.isSuppressed,
+      visibility: record.visibility ?? ("private" as const),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt
     };

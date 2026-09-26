@@ -37,7 +37,12 @@ export function initOtel(options: { serviceName?: string } = {}): Promise<OtelHa
       const exporterModule = await import("@opentelemetry/exporter-trace-otlp-http");
 
       const NodeSDK = sdkModule.NodeSDK;
-      const Resource = resourceModule.Resource;
+      // OTel JS 2.x: Resource class replaced by resourceFromAttributes helper.
+      const resourceFromAttributes = (
+        resourceModule as unknown as {
+          resourceFromAttributes?: (attrs: Record<string, string>) => unknown;
+        }
+      ).resourceFromAttributes;
       const OTLPTraceExporter = exporterModule.OTLPTraceExporter;
       const ATTR_SERVICE_NAME = semconvModule.ATTR_SERVICE_NAME;
 
@@ -52,10 +57,12 @@ export function initOtel(options: { serviceName?: string } = {}): Promise<OtelHa
           : undefined
       });
 
+      if (typeof resourceFromAttributes !== "function") {
+        throw new Error("resourceFromAttributes unavailable in @opentelemetry/resources");
+      }
+
       const sdk = new NodeSDK({
-        resource: new Resource({
-          [ATTR_SERVICE_NAME]: serviceName
-        }),
+        resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: serviceName }),
         traceExporter: exporter,
         instrumentations: []
       });

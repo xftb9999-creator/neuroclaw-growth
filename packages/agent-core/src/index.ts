@@ -48,6 +48,122 @@ export function isAiAvailable(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Embeddings (R2-A3) — OpenAI-compatible only; graceful null degradation.
+// ---------------------------------------------------------------------------
+
+export function embeddingsModel(): string {
+  return process.env.NEUROCLAW_EMBEDDINGS_MODEL ?? "text-embedding-3-small";
+}
+
+export function embeddingsDimensions(): number {
+  const parsed = Number(process.env.NEUROCLAW_EMBEDDINGS_DIMS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1536;
+}
+
+/** Embeddings require an OpenAI-compatible credentials set. */
+export function embeddingsApiKey(): string | undefined {
+  return process.env.NEUROCLAW_EMBEDDINGS_API_KEY ?? process.env.OPENAI_API_KEY;
+}
+
+export function isEmbeddingEnabled(): boolean {
+  return Boolean(embeddingsApiKey());
+}
+
+/**
+ * Embed a text snippet. Returns null when embeddings are unavailable
+ * (no key, provider error, or timeout) so callers can degrade to
+ * keyword/recency behavior instead of failing the run/job.
+ */
+export async function embedText(text: string): Promise<number[] | null> {
+  const apiKey = embeddingsApiKey();
+  if (!apiKey) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: embeddingsModel(),
+        input: trimmed.slice(0, 8000)
+      }),
+      signal: AbortSignal.timeout(aiTimeoutMs())
+    });
+
+    if (!response.ok) return null;
+
+    const payload = (await response.json()) as { data?: Array<{ embedding?: number[] }> };
+    const vector = payload.data?.[0]?.embedding;
+    if (!Array.isArray(vector) || vector.length === 0) return null;
+    return vector;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Generation guard �?retry / timeout / token usage metering (Round J, audit P1-11)
+// ---------------------------------------------------------------------------
+
+export interface AiUsageSample {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+type UsageListener = (sample: AiUsageSample) => void;
+
+let usageListener: UsageListener | null = null;
+
+/** Register a per-call usage listener (used by runtime-worker to meter runs). */
+export function setUsageListener(listener: UsageListener | null): void {
+  usageListener = listener;
+}
+
+function aiTimeoutMs(): number {
+  const parsed = Number(process.env.NEUROCLAW_AI_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120_000;
+}
+
+function aiMaxRetries(): number {
+  const parsed = Number(process.env.NEUROCLAW_AI_MAX_RETRIES);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 2;
+}
+
+async function guardedGenerate<S extends z.ZodType>(params: {
+  model: LanguageModel;
+  schema: S;
+  system?: string;
+  prompt: string;
+}): Promise<{ object: z.output<S> }> {
+  const result = await generateObject({
+    model: params.model,
+    schema: params.schema,
+    system: params.system,
+    prompt: params.prompt,
+    maxRetries: aiMaxRetries(),
+    abortSignal: AbortSignal.timeout(aiTimeoutMs())
+  });
+
+  const usage = (
+    result as { usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }
+  ).usage;
+  if (usage && usageListener) {
+    usageListener({
+      promptTokens: Number(usage.promptTokens ?? 0),
+      completionTokens: Number(usage.completionTokens ?? 0),
+      totalTokens: Number(usage.totalTokens ?? 0)
+    });
+  }
+
+  return { object: result.object as z.output<S> };
+}
+
+// ---------------------------------------------------------------------------
 // Output schemas (match template output contracts)
 // ---------------------------------------------------------------------------
 
@@ -78,7 +194,7 @@ function buildContentBriefPrompt(input: TemplateInputPayload): string {
   return `Business context: ${String(input.businessSummary ?? "N/A")}
 Target customer: ${String(input.targetCustomer ?? "N/A")}
 Preferred channels: ${Array.isArray(input.preferredChannels) ? input.preferredChannels.join(", ") : "N/A"}
-Content goal: ${String(input.contentGoal ?? "N/A")}
+Content goal: ${String(input.contentGoal ?? "N/A")}${formatBenchmarkContext(input)}
 
 Generate 3-5 compelling content angles and recommend the best channels for distribution.`;
 }
@@ -87,7 +203,7 @@ function buildConversionCopyPrompt(input: TemplateInputPayload): string {
   return `Offer context: ${String(input.businessSummary ?? "N/A")}
 Lead segment: ${String(input.targetCustomer ?? "N/A")}
 Outreach channels: ${Array.isArray(input.preferredChannels) ? input.preferredChannels.join(", ") : "N/A"}
-Offer asset: ${String(input.offerAsset ?? "N/A")}
+Offer asset: ${String(input.offerAsset ?? "N/A")}${formatBenchmarkContext(input)}
 
 Write a compelling conversion message that drives action. The message should be personalized, concise, and include a clear call-to-action.`;
 }
@@ -112,6 +228,36 @@ function formatStructuredMetrics(input: TemplateInputPayload): string {
     : "";
 }
 
+// R2-D v1 (Round AA): optional industry-benchmark section, injected by the
+// control plane as `input._benchmarks` (k-anonymous aggregated peer data).
+export function formatBenchmarkContext(input: TemplateInputPayload): string {
+  if (!Array.isArray(input._benchmarks) || input._benchmarks.length === 0) {
+    return "";
+  }
+
+  const lines = input._benchmarks
+    .filter((entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null && "templateType" in entry)
+    .map((entry) => {
+      const template = String(entry.templateType ?? "task");
+      const success = typeof entry.successRate === "number"
+        ? `${Math.round(entry.successRate * 100)}%`
+        : "n/a";
+      const p50 = typeof entry.p50DurationSec === "number"
+        ? `${Math.round(entry.p50DurationSec)}s`
+        : "n/a";
+      const p90 = typeof entry.p90DurationSec === "number"
+        ? `${Math.round(entry.p90DurationSec)}s`
+        : "n/a";
+      const sample = typeof entry.sampleSize === "number" ? ` · n=${entry.sampleSize}` : "";
+      return `- ${template}: peer success ${success} · p50 ${p50} · p90 ${p90}${sample}`;
+    });
+
+  return lines.length > 0
+    ? `\nIndustry benchmarks (aggregated peer data, k-anonymous, sample size ≥5):\n${lines.join("\n")}`
+    : "";
+}
+
 function buildWeeklyReviewPrompt(input: TemplateInputPayload): string {
   const metricsSummary = typeof input.metricsSummary === "string" && input.metricsSummary.trim()
     ? `\nMetrics summary: ${input.metricsSummary.trim()}`
@@ -120,7 +266,7 @@ function buildWeeklyReviewPrompt(input: TemplateInputPayload): string {
   return `Business context: ${String(input.businessSummary ?? "N/A")}
 Audience: ${String(input.targetCustomer ?? "N/A")}
 Relevant channels: ${Array.isArray(input.preferredChannels) ? input.preferredChannels.join(", ") : "N/A"}
-Metrics window: ${String(input.metricsWindowDays ?? "7")} days${metricsSummary}${formatStructuredMetrics(input)}
+Metrics window: ${String(input.metricsWindowDays ?? "7")} days${metricsSummary}${formatStructuredMetrics(input)}${formatBenchmarkContext(input)}
 
 Analyze the past week's performance and provide:
 1. A concise review summary highlighting wins and areas for improvement
@@ -166,7 +312,7 @@ export async function generateContentBrief(input: TemplateInputPayload): Promise
     return mockContentBrief(input);
   }
 
-  const result = await generateObject({
+  const result = await guardedGenerate({
     model,
     schema: contentBriefSchema,
     system: getSystemPrompt("content_brief"),
@@ -182,7 +328,7 @@ export async function generateConversionCopy(input: TemplateInputPayload): Promi
     return mockConversionCopy(input);
   }
 
-  const result = await generateObject({
+  const result = await guardedGenerate({
     model,
     schema: conversionCopySchema,
     system: getSystemPrompt("conversion_copy"),
@@ -198,7 +344,7 @@ export async function generateWeeklyReview(input: TemplateInputPayload): Promise
     return mockWeeklyReview(input);
   }
 
-  const result = await generateObject({
+  const result = await guardedGenerate({
     model,
     schema: weeklyReviewSchema,
     system: getSystemPrompt("weekly_review"),
@@ -218,7 +364,7 @@ export async function generateBrowserInsights(input: TemplateInputPayload): Prom
     ? input.preferredChannels as string[]
     : [];
 
-  const result = await generateObject({
+  const result = await guardedGenerate({
     model,
     schema: browserInsightsSchema,
     system: getSystemPrompt("browser_insights"),
@@ -234,7 +380,7 @@ Identify key market insights, customer pain points, and channel opportunities.`
 }
 
 // ---------------------------------------------------------------------------
-// Custom-agent structured generation (J2) — persona + dynamic output schema
+// Custom-agent structured generation (J2) �?persona + dynamic output schema
 // ---------------------------------------------------------------------------
 
 export interface OutputFieldLike {
@@ -302,7 +448,7 @@ export async function generateStructuredForAgent(opts: {
     return mockStructuredOutput(opts.fields, opts.input);
   }
 
-  const result = await generateObject({
+  const result = await guardedGenerate({
     model,
     schema: buildOutputZodSchema(opts.fields),
     system: opts.persona,
@@ -313,7 +459,7 @@ export async function generateStructuredForAgent(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// LLM Planner (J5-B) — route a free-form goal to the best-fit agent
+// LLM Planner (J5-B) �?route a free-form goal to the best-fit agent
 // ---------------------------------------------------------------------------
 
 export interface PlannerCatalogItem {
@@ -345,7 +491,7 @@ export async function pickAgentWithLLM(
     .join("\n");
 
   try {
-    const result = await generateObject({
+    const result = await guardedGenerate({
       model,
       schema: plannerSchema,
       system:
@@ -366,7 +512,7 @@ export async function pickAgentWithLLM(
   }
 }
 
-/** 规则兜底:关键词重合度打分(与前端旧逻辑一致,服务端化) */
+/** 规则兜底:关键词重合度打分(与前端旧逻辑一�?服务端化) */
 export function pickAgentWithRules(
   catalog: PlannerCatalogItem[],
   goal: string
@@ -378,7 +524,7 @@ export function pickAgentWithRules(
   for (const item of catalog) {
     const haystack = `${item.name} ${item.description ?? ""}`.toLowerCase();
     let score = 0;
-    for (const word of q.split(/[\s,，。.;；]+/).filter(Boolean)) {
+    for (const word of q.split(/[\s,，�?;；]+/).filter(Boolean)) {
       if (
         haystack.includes(word) ||
         haystack.includes(word.slice(0, Math.min(4, word.length)))
