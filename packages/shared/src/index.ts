@@ -4,8 +4,30 @@ import { z } from "zod";
 // Zod schemas — single source of truth for all domain types
 // ---------------------------------------------------------------------------
 
-export const workspacePlanSchema = z.enum(["starter", "growth"]);
+/**
+ * 订阅档位(Round K, audit P0-B3):与 04-business-model 四档体系对齐。
+ * `growth` 为 P0 早期遗留别名,按 Team 档配额解释;新代码请使用四档命名。
+ */
+export const workspacePlanSchema = z.enum([
+  "starter",
+  "growth",
+  "team",
+  "business",
+  "enterprise"
+]);
 export type WorkspacePlan = z.infer<typeof workspacePlanSchema>;
+
+/** 各档位月度 Runs 配额;0 = 不限量(Enterprise)。 */
+export const planMonthlyRunQuota: Record<WorkspacePlan, number> = {
+  starter: 30,
+  growth: 100,
+  team: 100,
+  business: 500,
+  enterprise: 0
+};
+
+/** 试用期(未订阅)默认配额——14 天免绑卡基线。 */
+export const TRIAL_MONTHLY_RUN_QUOTA = 30;
 
 export const workspaceSchema = z.object({
   id: z.string(),
@@ -202,7 +224,11 @@ export const runSchema = z.object({
   updatedAt: z.string(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
-  stepResults: z.array(runStepResultSchema).optional()
+  stepResults: z.array(runStepResultSchema).optional(),
+  // P1 Crew (Round V): set when the run was launched as a team relay step.
+  teamId: z.string().optional(),
+  // P1 Crew (Round U/V): owning relay-run instance id for durable steps.
+  relayId: z.string().optional()
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -253,13 +279,20 @@ export const runtimeEventSchema = z.object({
     "policy_evaluated",
     "step_degraded",
     "approval_requested",
+    "approval_decided",
     "step_completed",
     "run_completed",
     "run_failed"
   ]),
   runId: z.string(),
   stepId: z.string().optional(),
-  details: z.string()
+  details: z.string(),
+  /**
+   * W1b approval parity: set on `approval_decided` events so the persistence
+   * digest can tell an approval from a rejection that shares the same
+   * `details`, and so the log alone can rebuild the row's `approvalStatus`.
+   */
+  approvalDecision: z.object({ approved: z.boolean() }).optional()
 });
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
@@ -367,10 +400,19 @@ export function appendRunStepResult(
   run: Run,
   stepResult: RunStepResult
 ): Run {
+  // A step is identified by `stepId`: a re-executed step replaces its earlier
+  // result in place instead of appending a duplicate (mirrors the projection's
+  // upsert semantics in run-events.ts), while `currentStep`/`updatedAt` keep
+  // their existing overwrite behavior.
+  const existing = run.stepResults ?? [];
+  const index = existing.findIndex((entry) => entry.stepId === stepResult.stepId);
   return {
     ...run,
     currentStep: stepResult.stepId,
-    stepResults: [...(run.stepResults ?? []), stepResult],
+    stepResults:
+      index === -1
+        ? [...existing, stepResult]
+        : existing.map((entry, at) => (at === index ? stepResult : entry)),
     updatedAt: new Date().toISOString()
   };
 }
@@ -420,6 +462,25 @@ export type UpdateMemoryInput = z.infer<typeof updateMemoryInputSchema>;
 export const roleSchema = z.enum(["admin", "operator", "viewer"]);
 export type Role = z.infer<typeof roleSchema>;
 
+// ---------------------------------------------------------------------------
+// P1 Crew — persistent teams (deliverable 60, Round U)
+// ---------------------------------------------------------------------------
+
+export const crewPositionSchema = z.enum([
+  "content",
+  "conversion",
+  "review",
+  "operator"
+]);
+export type CrewPosition = z.infer<typeof crewPositionSchema>;
+
+export const crewTeamStatusSchema = z.enum(["active", "paused", "archived"]);
+export type CrewTeamStatus = z.infer<typeof crewTeamStatusSchema>;
+
+export const memoryVisibilitySchema = z.enum(["private", "team"]);
+export type MemoryVisibility = z.infer<typeof memoryVisibilitySchema>;
+
+
 export const rolePermissions: Record<Role, readonly string[]> = {
   admin: [
     "workspace:create",
@@ -431,7 +492,11 @@ export const rolePermissions: Record<Role, readonly string[]> = {
     "memory:write",
     "memory:delete",
     "template:read",
-    "agent:create"
+    "agent:create",
+    "integration:read",
+    "integration:validate",
+    "registry:read",
+    "registry:write"
   ],
   operator: [
     "workspace:read",
@@ -442,16 +507,31 @@ export const rolePermissions: Record<Role, readonly string[]> = {
     "memory:write",
     "memory:delete",
     "template:read",
-    "agent:create"
+    "agent:create",
+    "integration:read",
+    "integration:validate",
+    "registry:read"
   ],
   viewer: [
     "workspace:read",
     "run:read",
     "memory:read",
-    "template:read"
+    "template:read",
+    "integration:read",
+    "registry:read"
   ]
 };
 
 export function hasPermission(role: Role, permission: string): boolean {
   return rolePermissions[role].includes(permission);
 }
+
+// Round AC: universal kernel contracts and simulation-only pilot fixtures.
+export * from "./universal-contracts.js";
+export * from "./project-integration.js";
+export * from "./pilot-fixtures.js";
+export * from "./research-pack.js";
+// D5: capability matching service (pure functions, golden-file comparable).
+export * from "./capability-matching.js";
+// W1a: append-only Run event log contract + pure projection (run.events.v1).
+export * from "./run-events.js";

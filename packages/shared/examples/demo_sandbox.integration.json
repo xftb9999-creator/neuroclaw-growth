@@ -1,0 +1,8 @@
+{
+  "projectKey": "demo_sandbox",
+  "projectTypeKey": "synthetic_sandbox_demo",
+  "packId": "pack_demo_sandbox_simulation",
+  "adapterId": "adapter_demo_sandbox_simulation",
+  "sourceSystem": "DEMO_SANDBOX_SIMULATION",
+  "registeredAt": "2026-09-20T00:00:00Z"
+}

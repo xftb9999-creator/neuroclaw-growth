@@ -1,0 +1,200 @@
+{
+  "rule-6-all-covered": {
+    "verdict": "A",
+    "segments": [
+      {
+        "segment": "input",
+        "status": "EXECUTABLE"
+      },
+      {
+        "segment": "execute",
+        "status": "EXECUTABLE"
+      },
+      {
+        "segment": "deliver",
+        "status": "EXECUTABLE"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_research",
+        "capabilityRef": "cap_research",
+        "weight": "MUST",
+        "status": "COVERED",
+        "reason": "'plugin_alpha' covers 'cap_research' at E3",
+        "evidenceLevel": "E3",
+        "preconditions": []
+      },
+      {
+        "reqId": "req_write",
+        "capabilityRef": "cap_write",
+        "weight": "MUST",
+        "status": "COVERED",
+        "reason": "'plugin_alpha' covers 'cap_write' at E3",
+        "evidenceLevel": "E3",
+        "preconditions": []
+      },
+      {
+        "reqId": "req_send",
+        "capabilityRef": "cap_send",
+        "weight": "MUST",
+        "status": "COVERED",
+        "reason": "'plugin_beta' covers 'cap_send' at E2",
+        "evidenceLevel": "E2",
+        "preconditions": []
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "64cac29da76bbef89ca9344272ce920e4755df8520eb57ab102dd68b349d89d2"
+  },
+  "rule-1-must-missing-refuses": {
+    "verdict": "C",
+    "segments": [
+      {
+        "segment": "deliver",
+        "status": "BLOCKED"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_publish",
+        "capabilityRef": "cap_publish",
+        "weight": "MUST",
+        "status": "MISSING",
+        "reason": "No installed plugin provides 'cap_publish'",
+        "evidenceLevel": "E0",
+        "preconditions": [],
+        "unlockHint": "Install a plugin that provides 'cap_publish'"
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "217d867b529794e837d155f5dc8977e179584cf2f3f81b3b801efcc7176eb251"
+  },
+  "rule-2-dependency-unresolved": {
+    "verdict": "C",
+    "segments": [
+      {
+        "segment": "plan",
+        "status": "BLOCKED"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_dep",
+        "capabilityRef": "cap_dep",
+        "weight": "MUST",
+        "status": "MISSING",
+        "reason": "Every provider of 'cap_dep' is unusable — 'plugin_dep' has unresolved dependencies: plugin_base",
+        "evidenceLevel": "E0",
+        "preconditions": [],
+        "unlockHint": "Enable a provider of 'cap_dep' or resolve its dependencies"
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "373fdb9982eecd664e6e2949b64d8ef654c055688274cb07b2e467a72ac3d90b"
+  },
+  "rule-3-evidence-shortfall": {
+    "verdict": "B",
+    "segments": [
+      {
+        "segment": "execute",
+        "status": "CONDITIONAL"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_write",
+        "capabilityRef": "cap_write",
+        "weight": "MUST",
+        "status": "PARTIAL",
+        "reason": "evidence E1 is below the required E3 (requirement minEvidence E3)",
+        "evidenceLevel": "E1",
+        "preconditions": [
+          "Raise 'plugin_alpha' evidence to E3 or higher (currently E1)"
+        ]
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "74bfacfbfa20686fc2b268018bf08e3b41c36e384c943d7928eab428242eae5b"
+  },
+  "rule-4-channel-not-ready": {
+    "verdict": "B",
+    "segments": [
+      {
+        "segment": "deliver",
+        "status": "CONDITIONAL"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_send",
+        "capabilityRef": "cap_send",
+        "weight": "MUST",
+        "status": "PARTIAL",
+        "reason": "channels not READY: email=PENDING, sms=DISABLED",
+        "evidenceLevel": "E3",
+        "preconditions": [
+          "Bring 'plugin_beta' channel account(s) to READY: email (PENDING), sms (DISABLED)"
+        ]
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "09f743fa91d495b9b40e21ae1432d656b1b23cabe442d733d2eff93d06f04d53"
+  },
+  "rule-5-simulation-only-for-real-effect": {
+    "verdict": "B",
+    "segments": [
+      {
+        "segment": "deliver",
+        "status": "CONDITIONAL"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_publish",
+        "capabilityRef": "cap_publish",
+        "weight": "MUST",
+        "status": "PARTIAL",
+        "reason": "provider is simulationOnly but the requirement needs a real side effect",
+        "evidenceLevel": "E3",
+        "preconditions": [
+          "Replace 'plugin_sim' with a non-simulation provider for 'cap_publish'"
+        ]
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "86a76a18e09e50081a989825337e79fa92577169f3105611982edce882301269"
+  },
+  "should-missing-degrades-to-b": {
+    "verdict": "B",
+    "segments": [
+      {
+        "segment": "execute",
+        "status": "CONDITIONAL"
+      }
+    ],
+    "items": [
+      {
+        "reqId": "req_write",
+        "capabilityRef": "cap_write",
+        "weight": "MUST",
+        "status": "COVERED",
+        "reason": "'plugin_alpha' covers 'cap_write' at E3",
+        "evidenceLevel": "E3",
+        "preconditions": []
+      },
+      {
+        "reqId": "req_optimize",
+        "capabilityRef": "cap_optimize",
+        "weight": "SHOULD",
+        "status": "MISSING",
+        "reason": "No installed plugin provides 'cap_optimize'",
+        "evidenceLevel": "E0",
+        "preconditions": [],
+        "unlockHint": "Install a plugin that provides 'cap_optimize'"
+      }
+    ],
+    "reportVersion": "1.0",
+    "inputFingerprint": "6743b6bf60b102c5edd65cb24d50eb7e418ac329b95d5fb79003c544e6bbe1fd"
+  }
+}

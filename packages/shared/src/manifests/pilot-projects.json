@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "1.0",
+  "manifestVersion": "1.0.0",
+  "description": "P-0 清单外置：pilot 项目清单是数据而非编译期常量。运行期夹具与测试都经 loadPilotProjectManifest() 读取本文件，因此两者同源。",
+  "projectKeys": ["uaos", "hesn", "ex_protocol", "bitmind"]
+}
