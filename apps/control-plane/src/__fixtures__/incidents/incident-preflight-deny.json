@@ -1,0 +1,78 @@
+{
+  "fixtureVersion": "1.0",
+  "name": "incident-preflight-deny",
+  "description": "Preflight policy denied the run before any step executed.",
+  "source": {
+    "runId": "run_ef4f542c-a535-458e-b042-9e89b89f0cc0",
+    "table": "run_events",
+    "eventCount": 1
+  },
+  "events": [
+    {
+      "eventId": "evt_run_run_ef4f542c-a535-458e-b042-9e89b89f0cc0_1_b2a9e8331dc3",
+      "runId": "run_ef4f542c-a535-458e-b042-9e89b89f0cc0",
+      "sequence": 1,
+      "eventType": "growth.run.run_failed",
+      "occurredAt": "2026-09-27 01:45:32.198+08",
+      "emittedAt": "2026-09-27 01:45:32.198+08",
+      "payload": {
+        "runId": "run_ef4f542c-a535-458e-b042-9e89b89f0cc0",
+        "sequence": 1,
+        "type": "run_failed",
+        "stepId": null,
+        "details": "Run denied by preflight policy",
+        "runBase": {
+          "id": "run_ef4f542c-a535-458e-b042-9e89b89f0cc0",
+          "workspaceId": "ws_c22363e6-33f3-4192-926b-339b54c64f3e",
+          "templateType": "content_acquisition",
+          "input": {
+            "businessSummary": "forbidden keyword blocked by preflight policy",
+            "targetCustomer": "SMB operators",
+            "preferredChannels": [
+              "email"
+            ],
+            "contentGoal": "hooks"
+          },
+          "createdAt": "2026-09-27 01:45:32.145+08",
+          "updatedAt": "2026-09-27 01:45:32.198+08",
+          "startedAt": "2026-09-27 01:45:32.195+08",
+          "completedAt": "2026-09-27 01:45:32.198+08"
+        },
+        "failureReason": "Run denied by preflight policy"
+      }
+    }
+  ],
+  "expected": {
+    "input": {
+      "businessSummary": "forbidden keyword blocked by preflight policy",
+      "targetCustomer": "SMB operators",
+      "preferredChannels": [
+        "email"
+      ],
+      "contentGoal": "hooks"
+    },
+    "steps": [],
+    "sideEffects": [],
+    "run": {
+      "id": "run_ef4f542c-a535-458e-b042-9e89b89f0cc0",
+      "workspaceId": "ws_c22363e6-33f3-4192-926b-339b54c64f3e",
+      "templateType": "content_acquisition",
+      "status": "failed",
+      "input": {
+        "businessSummary": "forbidden keyword blocked by preflight policy",
+        "targetCustomer": "SMB operators",
+        "preferredChannels": [
+          "email"
+        ],
+        "contentGoal": "hooks"
+      },
+      "failureReason": "Run denied by preflight policy",
+      "currentStep": null,
+      "approvalStatus": "not_required",
+      "createdAt": "2026-09-27 01:45:32.145+08",
+      "updatedAt": "2026-09-27 01:45:32.198+08",
+      "startedAt": "2026-09-27 01:45:32.195+08",
+      "completedAt": "2026-09-27 01:45:32.198+08"
+    }
+  }
+}

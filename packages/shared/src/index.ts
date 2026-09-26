@@ -535,3 +535,5 @@ export * from "./research-pack.js";
 export * from "./capability-matching.js";
 // W1a: append-only Run event log contract + pure projection (run.events.v1).
 export * from "./run-events.js";
+// 梁一: incident replay fixture — format, exporter, replay (pure, no DB).
+export * from "./run-event-replay.js";
