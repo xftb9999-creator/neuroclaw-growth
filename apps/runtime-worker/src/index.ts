@@ -20,7 +20,9 @@ import {
   generateContentBrief,
   generateConversionCopy,
   generateWeeklyReview,
-  isAiAvailable
+  isAiAvailable,
+  setUsageListener,
+  type AiUsageSample
 } from "@neuroclaw/agent-core";
 import {
   OperatorBrowser,
@@ -361,6 +363,8 @@ export class RuntimeWorker {
   private readonly adapters: AdapterRegistry;
   private readonly registry: TemplateRegistry;
   private readonly traceLog: InMemoryTraceLog;
+  /** Per-run token usage captured from agent-core (Round J usage metering). */
+  private readonly usageByRun = new Map<string, AiUsageSample>();
 
   constructor(traceLog = new InMemoryTraceLog(), registry: TemplateRegistry = globalRegistry) {
     this.traceLog = traceLog;
@@ -370,6 +374,13 @@ export class RuntimeWorker {
       mcp: makeMcpAdapter(registry),
       notification: makeNotificationAdapter()
     };
+  }
+
+  /** Return and clear the accumulated token usage recorded for a run. */
+  consumeRunUsage(runId: string): AiUsageSample | undefined {
+    const usage = this.usageByRun.get(runId);
+    this.usageByRun.delete(runId);
+    return usage;
   }
 
   async acceptRun(run: Run): Promise<RuntimeExecutionResult> {
@@ -402,6 +413,32 @@ export class RuntimeWorker {
       this.registry.get(run.templateType) ?? getTemplateByType(run.templateType);
     this.registry.validateInput(run.templateType, run.input);
 
+    // Meter LLM token usage for this run (Round J).
+    setUsageListener((sample) => {
+      const current = this.usageByRun.get(run.id) ?? {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0
+      };
+      this.usageByRun.set(run.id, {
+        promptTokens: current.promptTokens + sample.promptTokens,
+        completionTokens: current.completionTokens + sample.completionTokens,
+        totalTokens: current.totalTokens + sample.totalTokens
+      });
+    });
+
+    try {
+      return await this.executeTemplateInner(run, approvedActions, template);
+    } finally {
+      setUsageListener(null);
+    }
+  }
+
+  private async executeTemplateInner(
+    run: Run,
+    approvedActions: AdapterActionType[],
+    template: Template
+  ): Promise<RuntimeExecutionResult> {
     const preflight = evaluateRunPolicy(run);
     if (preflight.decision === "deny") {
       return this.failRun(run, template, "Run denied by preflight policy");

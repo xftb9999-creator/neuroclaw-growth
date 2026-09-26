@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { eq, and, lte, asc, sql } from "drizzle-orm";
 
 import { getTraceLog, type TraceLog } from "@neuroclaw/observability";
 import { RuntimeWorker, type RuntimeExecutionResult } from "@neuroclaw/runtime-worker";
@@ -8,13 +7,26 @@ import {
   type Run,
   transitionRun
 } from "@neuroclaw/shared";
-import { type Database, jobs, jobAttempts } from "@neuroclaw/db";
+import { eq, and, lte, asc, sql } from "drizzle-orm";
+
+import { type Database, jobs, jobAttempts, knowledgeEntries } from "@neuroclaw/db";
+import { embedText } from "@neuroclaw/agent-core";
+import type { AiUsageSample } from "@neuroclaw/agent-core";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type JobType = "execute_run" | "resume_approved_run";
+export type JobType = "execute_run" | "resume_approved_run" | "embed_knowledge";
+
+/** Optional JSON payload carried by a job (Round O/V/U). */
+export interface JobPayload {
+  approvedActions?: AdapterActionType[];
+  knowledgeId?: string;
+  text?: string;
+  /** Relay instance id (Round V): lets the worker mirror relay state. */
+  relayId?: string;
+}
 export type JobStatus =
   | "pending"
   | "claimed"
@@ -31,7 +43,7 @@ export interface LifecycleCheckpoint {
 
 export interface EnqueueOptions {
   maxAttempts?: number;
-  payload?: { approvedActions?: AdapterActionType[] };
+  payload?: JobPayload;
 }
 
 export interface ProcessResult {
@@ -40,10 +52,12 @@ export interface ProcessResult {
   status: JobStatus;
   result?: RuntimeExecutionResult;
   error?: string;
+  /** LLM token usage metered during this job execution (Round J). */
+  usage?: AiUsageSample;
 }
 
 // ---------------------------------------------------------------------------
-// DurableJobQueue — database-backed job queue with claim/process/retry
+// DurableJobQueue �?database-backed job queue with claim/process/retry
 // ---------------------------------------------------------------------------
 
 export class DurableJobQueue {
@@ -97,7 +111,7 @@ export class DurableJobQueue {
     }
   }
 
-  async claimNext(): Promise<{ jobId: string; runId: string; type: JobType; payload?: { approvedActions?: AdapterActionType[] } } | null> {
+  async claimNext(): Promise<{ jobId: string; runId: string; type: JobType; payload?: JobPayload } | null> {
     const now = new Date().toISOString();
 
     // Atomically claim the next available job
@@ -139,7 +153,7 @@ export class DurableJobQueue {
     }
 
     const job = updated[0];
-    let payload: { approvedActions?: AdapterActionType[] } | undefined;
+    let payload: JobPayload | undefined;
     if (job.payload) {
       try {
         payload = JSON.parse(job.payload);
@@ -157,7 +171,7 @@ export class DurableJobQueue {
   }
 
   async processClaimed(
-    claimed: { jobId: string; runId: string; type: JobType; payload?: { approvedActions?: AdapterActionType[] } },
+    claimed: { jobId: string; runId: string; type: JobType; payload?: JobPayload },
     run: Run
   ): Promise<ProcessResult> {
     const span = this.traceLog.startSpan("durable-job-queue", "processClaimed", {
@@ -178,7 +192,7 @@ export class DurableJobQueue {
   }
 
   private async processClaimedInner(
-    claimed: { jobId: string; runId: string; type: JobType; payload?: { approvedActions?: AdapterActionType[] } },
+    claimed: { jobId: string; runId: string; type: JobType; payload?: JobPayload },
     run: Run
   ): Promise<ProcessResult> {
     const now = new Date().toISOString();
@@ -201,6 +215,10 @@ export class DurableJobQueue {
       .where(eq(jobs.id, claimed.jobId));
 
     try {
+      if (claimed.type === "embed_knowledge") {
+        return await this.processEmbedKnowledge(claimed, run, attemptId);
+      }
+
       const result =
         claimed.type === "resume_approved_run" && claimed.payload?.approvedActions
           ? await this.runtimeWorker.resumeApprovedRun(run, claimed.payload.approvedActions)
@@ -245,7 +263,8 @@ export class DurableJobQueue {
         jobId: claimed.jobId,
         runId: claimed.runId,
         status: "completed",
-        result
+        result,
+        usage: this.runtimeWorker.consumeRunUsage(claimed.runId)
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -303,7 +322,7 @@ export class DurableJobQueue {
         };
       }
 
-      // Max retries exceeded — mark as permanently failed
+      // Max retries exceeded �?mark as permanently failed
       await this.db
         .update(jobs)
         .set({
@@ -328,6 +347,56 @@ export class DurableJobQueue {
         error: errorMessage
       };
     }
+  }
+
+  /**
+   * R2-A3: embed a knowledge entry via the embeddings provider and persist
+   * the vector. Missing provider/key degrades to a completed no-op so the
+   * queue never accumulates junk; failures route through the retry path.
+   */
+  private async processEmbedKnowledge(
+    claimed: { jobId: string; runId: string; type: JobType; payload?: JobPayload },
+    run: Run,
+    attemptId: string
+  ): Promise<ProcessResult> {
+    const knowledgeId = typeof claimed.payload?.knowledgeId === "string" ? claimed.payload.knowledgeId : null;
+    const text = typeof claimed.payload?.text === "string" ? claimed.payload.text : "";
+
+    const vector = await embedText(text);
+    const completedAt = new Date().toISOString();
+
+    await this.db
+      .update(jobAttempts)
+      .set({ status: "completed", completedAt })
+      .where(eq(jobAttempts.id, attemptId));
+
+    await this.db
+      .update(jobs)
+      .set({ status: "completed", updatedAt: completedAt, completedAt })
+      .where(eq(jobs.id, claimed.jobId));
+
+    let embedded = false;
+    if (vector && knowledgeId) {
+      await this.db.execute(
+        sql`UPDATE knowledge_entries SET embedding = ${`[${vector.join(",")}]`}::vector WHERE id = ${knowledgeId}`
+      );
+      embedded = true;
+    }
+
+    this.recordCheckpoint(run.id, embedded ? "completed" : "runtime");
+
+    this.traceLog.record({
+      scope: "durable-job-queue",
+      action: embedded ? "job_completed" : "job_embed_skipped",
+      metadata: { jobId: claimed.jobId, knowledgeId: knowledgeId ?? "", embedded: String(embedded) }
+    });
+
+    return {
+      jobId: claimed.jobId,
+      runId: claimed.runId,
+      status: "completed",
+      result: { run, templateId: "embed_knowledge", events: [] }
+    };
   }
 
   /**
@@ -430,7 +499,7 @@ export class DurableJobQueue {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy compatibility — wraps the new queue for existing callers
+// Legacy compatibility �?wraps the new queue for existing callers
 // ---------------------------------------------------------------------------
 
 export class TemporalWorkerSkeleton extends DurableJobQueue {
