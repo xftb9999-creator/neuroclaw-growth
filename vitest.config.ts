@@ -41,7 +41,45 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["**/*.test.ts"],
-    testTimeout: 30000
+    environmentOptions: {
+      jsdom: {
+        url: "http://localhost"
+      }
+    },
+    include: ["**/*.test.ts", "**/*.test.tsx"],
+    testTimeout: 60000,
+    setupFiles: ["./apps/web/src/test/setup.ts"],
+    // R2-A1: PGlite (embedded Postgres) pays a one-shot WASM/JIT warmup per
+    // worker process (~10s). Parallel workers saturate the CPU and cause
+    // timeout flakes — run files serially in one fork instead.
+    pool: "forks",
+    maxWorkers: 1,
+    isolate: true,
+    execArgv: ["--no-experimental-webstorage"]
+  },
+  coverage: {
+    provider: "v8",
+    // Round R baseline scope: the web layer (components + libs) where the
+    // test pyramid lives. Full-repo coverage runs in CI against pg16
+    // (PGlite-under-instrumentation is ~10x slower locally).
+    include: ["apps/web/src/**"],
+    exclude: [
+      "apps/web/src/test/**",
+      "apps/web/src/**/__tests__/**",
+      "apps/web/src/**/*.test.*",
+      "apps/web/dist/**"
+    ],
+    reportsDirectory: "coverage",
+    // Ratchet tier 1 (Round S): measured 12.61% lines / 69.58% branches —
+    // thresholds lock in current coverage with headroom for refactors;
+    // raise with each legacy-page test migration wave.
+    thresholds: {
+      "apps/web/src/**": {
+        lines: 11,
+        branches: 60,
+        functions: 27,
+        statements: 11
+      }
+    }
   }
 });

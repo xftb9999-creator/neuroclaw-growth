@@ -3,6 +3,8 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "types": [
       "vite/client"
     ]
