@@ -1,0 +1,23 @@
+# Local Postgres 16 + pgvector for NeuroClaw R2-A1+ (ADR-56).
+# Usage: docker compose -f docker-compose.dev.yml up -d
+# Then: DATABASE_URL=postgres://postgres:postgres@localhost:5432/neuroclaw
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: neuroclaw-pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: neuroclaw
+    ports:
+      - "5432:5432"
+    volumes:
+      - neuroclaw-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  neuroclaw-pgdata:
