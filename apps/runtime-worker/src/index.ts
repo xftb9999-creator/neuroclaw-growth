@@ -40,6 +40,10 @@ import {
   getSmtpTransporter,
   isSmtpConfigured
 } from "./smtp.js";
+import {
+  buildNotificationDeliveryIntent,
+  isNotificationIntentModeEnabled
+} from "./outbox.js";
 
 export interface RuntimeExecutionResult {
   run: Run;
@@ -250,9 +254,29 @@ function makeNotificationAdapter(): NotificationAdapter {
         ? run.input.recipientEmail
         : "";
 
+      const intentMode = isNotificationIntentModeEnabled();
+
       // 1. Webhook delivery — external system owns the channel distribution.
+      //    Outbox intent mode (§2.5): stop sending, record the intent instead.
       const webhookUrl = process.env.NEUROCLAW_DELIVERY_WEBHOOK_URL;
       if (webhookUrl) {
+        if (intentMode) {
+          return {
+            status: "succeeded",
+            actionType,
+            summary: "Recorded webhook delivery intent for outbox dispatch",
+            payload: {
+              // `approvalPreview` stays required by the template output contract.
+              approvalPreview: draft,
+              deliveryIntent: buildNotificationDeliveryIntent({
+                transport: "webhook",
+                run,
+                actionType,
+                draft
+              })
+            }
+          };
+        }
         try {
           const response = await fetch(webhookUrl, {
             method: "POST",
@@ -290,7 +314,25 @@ function makeNotificationAdapter(): NotificationAdapter {
       }
 
       // 2. SMTP email delivery when configured with a recipient.
+      //    Outbox intent mode (§2.5): stop sending, record the intent instead.
       if (isSmtpConfigured() && recipientEmail) {
+        if (intentMode) {
+          return {
+            status: "succeeded",
+            actionType,
+            summary: "Recorded SMTP delivery intent for outbox dispatch",
+            payload: {
+              // `approvalPreview` stays required by the template output contract.
+              approvalPreview: draft,
+              deliveryIntent: buildNotificationDeliveryIntent({
+                transport: "smtp",
+                run,
+                actionType,
+                draft
+              })
+            }
+          };
+        }
         try {
           const transporter = await getSmtpTransporter();
           if (transporter) {
