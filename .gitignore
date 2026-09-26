@@ -35,3 +35,7 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local evidence & coverage output
+.artifacts/
+coverage/
