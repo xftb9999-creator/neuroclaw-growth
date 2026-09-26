@@ -32,6 +32,7 @@ export {
   usageCounters,
   productEvents,
   outboxEvents,
+  outboxDeliveryAttempts,
   runEvents,
   workflowDefinitions,
   projectPackRegistry,

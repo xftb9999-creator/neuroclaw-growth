@@ -197,13 +197,15 @@ describe("AC-4-0 Growth Run compatibility wrapper", () => {
     const { db } = await setup();
     expect(await runMigrations(db)).toEqual([]);
     await expect(rollbackMigration(db, "0009_growth_work_items")).rejects.toThrow(/later migration/i);
+    expect(await rollbackMigration(db, "0012_outbox_delivery_attempts")).toBe(true);
     expect(await rollbackMigration(db, "0011_run_events")).toBe(true);
     expect(await rollbackMigration(db, "0010_ac6_attempt_replay_audit")).toBe(true);
     expect(await rollbackMigration(db, "0009_growth_work_items")).toBe(true);
     expect(await runMigrations(db)).toEqual([
       "0009_growth_work_items",
       "0010_ac6_attempt_replay_audit",
-      "0011_run_events"
+      "0011_run_events",
+      "0012_outbox_delivery_attempts"
     ]);
     expect(await runMigrations(db)).toEqual([]);
   });

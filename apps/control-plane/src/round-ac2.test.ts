@@ -197,6 +197,7 @@ describe("AC-2-0 immutable WorkflowDefinition foundation", () => {
 
     expect(await runMigrations(db)).toEqual([]);
     for (const migrationId of [
+      "0012_outbox_delivery_attempts",
       "0011_run_events",
       "0010_ac6_attempt_replay_audit",
       "0009_growth_work_items",
@@ -212,7 +213,8 @@ describe("AC-2-0 immutable WorkflowDefinition foundation", () => {
       "0008_project_pack_adapter_registry",
       "0009_growth_work_items",
       "0010_ac6_attempt_replay_audit",
-      "0011_run_events"
+      "0011_run_events",
+      "0012_outbox_delivery_attempts"
     ]);
     expect(await runMigrations(db)).toEqual([]);
 

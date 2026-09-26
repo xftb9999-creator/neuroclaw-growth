@@ -146,6 +146,7 @@ describe("AC-1-1 local Outbox", () => {
     expect(await runMigrations(db)).toEqual([]);
     await expect(rollbackMigration(db, "0005_outbox_events")).rejects.toThrow(/later migration/i);
     for (const migrationId of [
+      "0012_outbox_delivery_attempts",
       "0011_run_events",
       "0010_ac6_attempt_replay_audit",
       "0009_growth_work_items",
@@ -163,7 +164,8 @@ describe("AC-1-1 local Outbox", () => {
       "0008_project_pack_adapter_registry",
       "0009_growth_work_items",
       "0010_ac6_attempt_replay_audit",
-      "0011_run_events"
+      "0011_run_events",
+      "0012_outbox_delivery_attempts"
     ]);
     expect(await runMigrations(db)).toEqual([]);
   });

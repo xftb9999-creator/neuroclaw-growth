@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -473,6 +474,50 @@ export const outboxEvents = pgTable(
   (table) => [
     uniqueIndex("idx_outbox_idempotency").on(table.idempotencyScope, table.idempotencyKey),
     index("idx_outbox_status_created").on(table.status, table.createdAt)
+  ]
+);
+
+/**
+ * W2 (migration 0012): the delivery-attempt journal that externalizes the
+ * retry dimension of `outbox_events`. The Outbox keeps its frozen 5-state
+ * contract (PENDING/PROCESSING/COMPLETED/FAILED/CANCELED, 0005) — one row per
+ * transport delivery attempt lives here instead of adding states.
+ *
+ * Idempotency guards (B1 §2, "同 idempotencyKey 不重复投递"):
+ *   * `(idempotency_key, attempt_number)` unique — at most one row per attempt;
+ *   * partial unique on `idempotency_key WHERE status = 'succeeded'` — at most
+ *     one *successful* delivery per content key, enforced by the database even
+ *     if two dispatchers race (the dispatcher also pre-checks, and claims run
+ *     under a single-writer lease).
+ */
+export const outboxDeliveryAttempts = pgTable(
+  "outbox_delivery_attempts",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    /** `webhook` | `smtp` | `preview` (CHECK in migration 0012). */
+    transport: text("transport").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    /** Full sha256 of the canonical request body, for audit (key carries only prefixes). */
+    requestHash: text("request_hash").notNull(),
+    /** `started` | `succeeded` | `failed` (CHECK in migration 0012). */
+    status: text("status").notNull(),
+    httpStatus: integer("http_status"),
+    error: text("error"),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+    nextAttemptAt: text("next_attempt_at")
+  },
+  (table) => [
+    uniqueIndex("idx_outbox_delivery_attempts_key_attempt").on(
+      table.idempotencyKey,
+      table.attemptNumber
+    ),
+    uniqueIndex("idx_outbox_delivery_attempts_key_succeeded")
+      .on(table.idempotencyKey)
+      .where(sql`${table.status} = 'succeeded'`),
+    index("idx_outbox_delivery_attempts_event").on(table.eventId, table.attemptNumber)
   ]
 );
 

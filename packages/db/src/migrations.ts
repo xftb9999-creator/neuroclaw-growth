@@ -798,6 +798,43 @@ export const MIGRATIONS: Migration[] = [
     // The table is isolated from existing analytics data, so local rollback is
     // safe and re-running 0011 recreates the same contract via IF NOT EXISTS.
     rollbackStatements: [`DROP TABLE IF EXISTS run_events`]
+  },
+  {
+    // W2 (B1 §2): the retry dimension of the delivery Outbox is externalized
+    // here because `outbox_events` (0005) has a frozen 5-state contract whose
+    // FAILED state is terminal. One row per transport delivery attempt:
+    // started → succeeded | failed. The partial unique index is the database
+    // guard for "at most one successful delivery per idempotency key"; the
+    // dispatcher additionally checks before calling the transport and claims
+    // under a single-writer lease (no SKIP LOCKED dependency).
+    id: "0012_outbox_delivery_attempts",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS outbox_delivery_attempts (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL,
+        transport TEXT NOT NULL
+          CHECK (transport IN ('webhook', 'smtp', 'preview')),
+        idempotency_key TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        status TEXT NOT NULL
+          CHECK (status IN ('started', 'succeeded', 'failed')),
+        http_status INTEGER,
+        error TEXT,
+        started_at TIMESTAMPTZ NOT NULL,
+        ended_at TIMESTAMPTZ,
+        next_attempt_at TIMESTAMPTZ
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_delivery_attempts_key_attempt
+         ON outbox_delivery_attempts(idempotency_key, attempt_number)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_delivery_attempts_key_succeeded
+         ON outbox_delivery_attempts(idempotency_key) WHERE status = 'succeeded'`,
+      `CREATE INDEX IF NOT EXISTS idx_outbox_delivery_attempts_event
+         ON outbox_delivery_attempts(event_id, attempt_number)`
+    ],
+    // The table is isolated from existing data, so local rollback is safe and
+    // re-running 0012 recreates the same contract via IF NOT EXISTS.
+    rollbackStatements: [`DROP TABLE IF EXISTS outbox_delivery_attempts`]
   }
 ];
 
