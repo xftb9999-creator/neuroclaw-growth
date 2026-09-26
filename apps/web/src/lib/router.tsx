@@ -4,6 +4,7 @@ import type { ClonedRunPayload, Route, TemplateType } from "../types.js";
 export function parseRoute(pathname: string): Route {
   if (pathname === "/onboarding") return { name: "onboarding" };
   if (pathname === "/" || pathname === "/home") return { name: "home" };
+  if (pathname === "/cockpit") return { name: "cockpit" };
   if (pathname === "/templates") return { name: "templates" };
   if (pathname === "/profile") return { name: "profile" };
   if (pathname === "/launch") return { name: "launch" };
@@ -20,6 +21,8 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/inbox") return { name: "inbox" };
   if (pathname === "/schedule") return { name: "schedule" };
   if (pathname === "/analytics") return { name: "analytics" };
+  if (pathname === "/billing") return { name: "billing" };
+  if (pathname === "/crews") return { name: "crews" };
   if (pathname === "/history") return { name: "history" };
   if (pathname === "/memory") return { name: "memory" };
 

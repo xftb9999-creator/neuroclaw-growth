@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getTeam,
   launchTeam,
+  listCrewTeams,
   listTeams,
+  type CrewTeam,
   type TeamListItem,
   type TeamRunRecord,
   type TeamStepView
@@ -43,6 +45,8 @@ export function TeamPage(props: {
   const { t } = useI18n();
   const [stage, setStage] = useState<Stage>(() => (props.focus === "results" ? 4 : props.teamId ? 3 : 1));
   const [playbookKey, setPlaybookKey] = useState<string>("sprint");
+  const [crewTeamId, setCrewTeamId] = useState<string>("");
+  const [crews, setCrews] = useState<CrewTeam[]>([]);
   const [goal, setGoal] = useState("");
   const [audience, setAudience] = useState("");
   const [teamRunId, setTeamRunId] = useState<string | null>(props.teamId ?? null);
@@ -79,6 +83,16 @@ export function TeamPage(props: {
   useEffect(() => {
     void loadRoot();
   }, [loadRoot]);
+
+  // Round W: load persistent crews for the linkage selector.
+  useEffect(() => {
+    let cancelled = false;
+    listCrewTeams(props.workspaceId)
+      .then((items) => { if (!cancelled) setCrews(items); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.workspaceId]);
 
   // 团队运行中轮询
   const refreshTeam = useCallback(async (teamId: string) => {
@@ -123,7 +137,8 @@ export function TeamPage(props: {
         workspaceId: props.workspaceId,
         playbookKey,
         goal: goal.trim(),
-        audience: audience.trim() || undefined
+        audience: audience.trim() || undefined,
+        crewTeamId: crewTeamId || undefined
       })) as { teamRunId: string };
       setTeamRunId(result.teamRunId);
       const record = await getTeam(result.teamRunId);
@@ -281,7 +296,7 @@ export function TeamPage(props: {
           {PLAYBOOK_KEYS.map((key) => (
             <Card
               key={key}
-              className={`cursor-pointer lift ${playbookKey === key ? "!border-brand ring-1 ring-brand/40" : ""}`}
+              data-testid={`playbook-${key}`} className={`cursor-pointer lift ${playbookKey === key ? "!border-brand ring-1 ring-brand/40" : ""}`}
               onClick={() => { setPlaybookKey(key); setStage(2); }}
             >
               <CardHeader>
@@ -320,11 +335,27 @@ export function TeamPage(props: {
       </div>
       <Label>
         <span>{t("team.goalLabel")}</span>
-        <Input value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="母婴店开业周…" />
+        <Input data-testid="relay-goal-input" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="母婴店开业推广" />
       </Label>
       <Label>
         <span>{t("team.audienceLabel")}</span>
         <Input value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="新手妈妈" />
+      </Label>
+      <Label>
+        <span>{t("team.crewLabel")}</span>
+        <select
+          data-testid="relay-crew-select"
+          value={crewTeamId}
+          onChange={(event) => setCrewTeamId(event.target.value)}
+          className="border border-line rounded-input px-3 py-2.5 text-[14px] bg-white"
+        >
+          <option value="">{t("team.crewNone")}</option>
+          {(crews ?? []).map((crew) => (
+            <option key={crew.id} value={crew.id}>
+              {crew.name}
+            </option>
+          ))}
+        </select>
       </Label>
       <Button size="lg" onClick={() => void startRelay()} disabled={launching || !goal.trim()}>
         {launching ? t("team.running") : t("team.start")}

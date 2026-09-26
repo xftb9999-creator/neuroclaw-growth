@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { createWorkspace } from "../lib/api.js";
+import { createWorkspace, setWorkspaceIndustry } from "../lib/api.js";
 import { useI18n } from "../lib/i18n.js";
 import { Button } from "../components/ui/Button.js";
 import { Card } from "../components/ui/Card.js";
@@ -25,6 +25,7 @@ export function OnboardingPage(props: {
   const { t } = useI18n();
   const [name, setName] = useState("");
   const [plan, setPlan] = useState<WorkspacePlan>("growth");
+  const [industry, setIndustry] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -85,7 +86,27 @@ export function OnboardingPage(props: {
                   throw new Error(t("onboarding.nameRequired"));
                 }
 
-                const workspace = (await createWorkspace({ name, plan })) as { id: string };
+                const workspace = (await createWorkspace({ name, plan })) as {
+                  id: string;
+                  createdAt?: string;
+                };
+                if (workspace.createdAt) {
+                  try {
+                    window.localStorage.setItem(
+                      "neuroclaw.workspaceCreatedAt",
+                      workspace.createdAt
+                    );
+                  } catch {
+                    // storage unavailable — 7-day banner falls back to earliest run
+                  }
+                }
+                if (industry.trim()) {
+                  try {
+                    await setWorkspaceIndustry(workspace.id, industry.trim());
+                  } catch {
+                    // Industry context is an enhancement; never block workspace creation.
+                  }
+                }
                 props.onCreated(workspace.id);
               } catch (error) {
                 setError(error instanceof Error ? error.message : t("templates.loadError"));
@@ -116,6 +137,16 @@ export function OnboardingPage(props: {
                 <option value="growth">Growth</option>
                 <option value="starter">Starter</option>
               </select>
+            </Label>
+            <Label>
+              <span>{t("onboarding.industryLabel")}</span>
+              <Input
+                data-testid="workspace-industry"
+                value={industry}
+                onChange={(event) => setIndustry(event.target.value)}
+                placeholder={t("onboarding.industryPlaceholder")}
+              />
+              <span className="text-[12px] text-muted font-normal">{t("onboarding.industryHint")}</span>
             </Label>
             <Button
               data-testid="create-workspace"

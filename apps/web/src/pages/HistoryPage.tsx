@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { listRunHistory } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
 import { navigate } from "../lib/router.js";
 import { useI18n } from "../lib/i18n.js";
+import { formatRunStatus } from "../lib/statusLabels.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardHeader } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
@@ -16,31 +18,26 @@ export function HistoryPage(props: {
   onOpenRun: (runId: string) => void;
   onReuse: (runId: string) => Promise<void>;
 }) {
-  const { t } = useI18n();
-  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const { t, locale } = useI18n();
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    try {
-      const items = (await listRunHistory(props.workspaceId)) as RunRecord[];
-      setRuns(items);
-      setError(null);
-    } catch (loadError) {
-      if (isWorkspaceMissingError(loadError)) {
-        props.onWorkspaceMissing(t("history.workspaceExpired"));
-        return;
-      }
-      setError(loadError instanceof Error ? loadError.message : t("history.loadError"));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const runsQuery = useQuery({
+    queryKey: ["runs", props.workspaceId],
+    queryFn: async () => listRunHistory(props.workspaceId) as Promise<RunRecord[]>
+  });
 
   useEffect(() => {
-    void load();
+    if (!runsQuery.error) return;
+    if (isWorkspaceMissingError(runsQuery.error)) {
+      props.onWorkspaceMissing(t("history.workspaceExpired"));
+      return;
+    }
+    setError(runsQuery.error instanceof Error ? runsQuery.error.message : t("history.loadError"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.workspaceId]);
+  }, [runsQuery.error]);
+
+  const runs = runsQuery.data ?? [];
+  const loading = runsQuery.isPending;
 
   return (
     <RouteLayout title={t("history.title")} subtitle={t("history.subtitle")}>
@@ -97,9 +94,9 @@ export function HistoryPage(props: {
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-2">
-                    <Badge variant={statusToBadgeVariant(run.status)}>
-                      {run.status}
-                    </Badge>
+              <Badge variant={statusToBadgeVariant(run.status)}>
+                {formatRunStatus(run.status, locale)}
+              </Badge>
                     <div className="flex flex-wrap gap-2">
                       <Button
                         data-testid={`open-${run.id}`}

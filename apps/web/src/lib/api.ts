@@ -83,6 +83,59 @@ export function approveRun(
   });
 }
 
+/** Round L 撤回窗口:撤销排队中/待审批/执行中的运行。 */
+export function cancelRun(runId: string) {
+  return request(`/api/runs/${runId}/cancel`, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Billing & north-star (Round K backend / Round L frontend)
+// ---------------------------------------------------------------------------
+
+export interface BillingSummary {
+  plan: string;
+  status: string;
+  monthlyRunQuota: number;
+  startedAt: string;
+  renewsAt?: string;
+  usage: {
+    month: string;
+    runsCreated: number;
+    runsCompleted: number;
+    tokensUsed: number;
+    quotaRemaining: number | null;
+  };
+}
+
+export function getBillingSummary(workspaceId: string) {
+  return request<BillingSummary>(
+    `/api/billing/summary?workspaceId=${encodeURIComponent(workspaceId)}`
+  );
+}
+
+export function changePlan(workspaceId: string, plan: string) {
+  return request<BillingSummary>("/api/billing/plan", {
+    method: "POST",
+    body: JSON.stringify({ workspaceId, plan })
+  });
+}
+
+export interface NorthStarOverview {
+  windowDays: number;
+  scope: string;
+  series: Array<Record<string, number | string>>;
+  totals: Record<string, number>;
+  activationRate: number | null;
+  day7SuccessRate: number | null;
+  workspacesCreatedInWindow: number;
+}
+
+export function getNorthStarOverview(workspaceId: string, days = 30) {
+  return request<NorthStarOverview>(
+    `/api/analytics/northstar?workspaceId=${encodeURIComponent(workspaceId)}&days=${days}`
+  );
+}
+
 export function listWorkspaceMemory(workspaceId: string) {
   return request(`/api/workspaces/${workspaceId}/memory`);
 }
@@ -189,7 +242,7 @@ export interface ArtifactRecord {
 }
 
 export function listArtifacts(workspaceId: string) {
-  return request(`/api/workspaces/${workspaceId}/artifacts`);
+  return request<ArtifactRecord[]>(`/api/workspaces/${workspaceId}/artifacts`);
 }
 
 export function deleteArtifact(artifactId: string) {
@@ -257,7 +310,7 @@ export interface PendingApproval {
 
 export function listPendingApprovals(workspaceId?: string) {
   const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
-  return request(`/api/approvals/pending${query}`);
+  return request<PendingApproval[]>(`/api/approvals/pending${query}`);
 }
 
 export interface ScheduleRecord {
@@ -314,7 +367,7 @@ export interface TeamRunRecord {
   playbookKey: string;
   goal: string;
   audience: string;
-  status: "running" | "waiting_approval" | "completed" | "failed";
+  status: "running" | "waiting_approval" | "paused" | "cancelled" | "completed" | "failed";
   currentStep: number;
   steps: TeamStepView[];
   createdAt: string;
@@ -331,7 +384,8 @@ export interface TeamListItem {
 }
 
 export function listTeams(workspaceId: string) {
-  return request<TeamListItem[]>(`/api/teams?workspaceId=${encodeURIComponent(workspaceId)}`);
+  // Round U: relay-run instances moved off /teams (now persistent Crew teams).
+  return request<TeamListItem[]>(`/api/relay-runs?workspaceId=${encodeURIComponent(workspaceId)}`);
 }
 
 export function launchTeam(payload: {
@@ -339,12 +393,91 @@ export function launchTeam(payload: {
   playbookKey: string;
   goal: string;
   audience?: string;
+  crewTeamId?: string;
 }) {
-  return request("/api/teams/launch", { method: "POST", body: JSON.stringify(payload) });
+  return request("/api/relay-runs/launch", { method: "POST", body: JSON.stringify(payload) });
 }
 
+// ---------------------------------------------------------------------------
+// P1 Crew — persistent teams (Round W UI)
+// ---------------------------------------------------------------------------
+
+export interface CrewMember {
+  id: string;
+  teamId: string;
+  workspaceId: string;
+  agentId: string;
+  position: string;
+  createdAt: string;
+}
+
+export interface CrewTeam {
+  id: string;
+  workspaceId: string;
+  name: string;
+  goal: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  members?: CrewMember[];
+}
+
+export function createCrewTeam(payload: { workspaceId: string; name: string; goal?: string }) {
+  return request<CrewTeam>("/api/teams", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function listCrewTeams(workspaceId: string) {
+  return request<CrewTeam[]>(`/api/teams?workspaceId=${encodeURIComponent(workspaceId)}`);
+}
+
+export function getCrewTeamDetail(teamId: string) {
+  return request<CrewTeam>(`/api/teams/${teamId}`);
+}
+
+export function updateCrewTeamStatus(teamId: string, status: string) {
+  return request<{ ok: boolean }>(`/api/teams/${teamId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ teamId, status })
+  });
+}
+
+export function addCrewMember(teamId: string, payload: { agentId: string; position: string }) {
+  return request<{ id: string }>(`/api/teams/${teamId}/members`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function removeCrewMember(teamId: string, memberId: string) {
+  return request<{ ok: boolean }>(`/api/teams/${teamId}/members/${memberId}`, { method: "DELETE" });
+}
 export function getTeam(teamId: string) {
-  return request<TeamRunRecord>(`/api/teams/${teamId}`);
+  return request<TeamRunRecord>(`/api/relay-runs/${teamId}`);
+}
+
+/** Round V: relay-level control — pause / resume / cancel (cascade). */
+export function updateRelayRunStatus(relayId: string, status: "running" | "paused" | "cancelled") {
+  return request<TeamRunRecord>(`/api/relay-runs/${relayId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+}
+
+export interface TeamMemoryResponse {
+  team: { id: string; name: string; status: string };
+  memories: Array<{
+    id: string;
+    summary: string;
+    templateType: string;
+    sourceRunId: string;
+    isPinned: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+
+export function getTeamMemory(teamId: string) {
+  return request<TeamMemoryResponse>(`/api/teams/${teamId}/memory`);
 }
 
 export interface PlannerDecision {
@@ -376,5 +509,38 @@ export interface AnalyticsOverview {
 export function getAnalyticsOverview(workspaceId: string, days = 14) {
   return request<AnalyticsOverview>(
     `/api/analytics/overview?workspaceId=${encodeURIComponent(workspaceId)}&days=${days}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Industry benchmarks (R2-D, Round Y/AA — deliverable 62)
+// ---------------------------------------------------------------------------
+
+export interface BenchmarkEntry {
+  industry: string;
+  templateType: string;
+  totalRuns: number;
+  completedRuns: number;
+  successRate: number | null;
+  p50DurationSec: number | null;
+  p90DurationSec: number | null;
+  sampleSize: number;
+  period: string;
+}
+
+export function getBenchmarks(industry: string) {
+  return request<BenchmarkEntry[]>(`/api/benchmarks/${encodeURIComponent(industry)}`);
+}
+
+export function getWorkspaceIndustry(workspaceId: string) {
+  return request<{ industry: string | null }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/industry`
+  );
+}
+
+export function setWorkspaceIndustry(workspaceId: string, industry: string) {
+  return request<{ ok: boolean }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/industry`,
+    { method: "PATCH", body: JSON.stringify({ industry }) }
   );
 }

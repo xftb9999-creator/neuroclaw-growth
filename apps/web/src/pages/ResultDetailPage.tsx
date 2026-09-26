@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { getRun } from "../lib/api.js";
 import { useI18n } from "../lib/i18n.js";
+import { formatRunStatus } from "../lib/statusLabels.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
@@ -16,7 +17,7 @@ export function ResultDetailPage(props: {
   onRunAgain: (run: RunRecord) => void;
   onBackToStatus: (runId: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,7 +55,9 @@ export function ResultDetailPage(props: {
         <>
           <Card>
             <CardHeader>
-              <Badge variant={statusToBadgeVariant(run.status)}>{run.status}</Badge>
+              <Badge variant={statusToBadgeVariant(run.status)}>
+                {formatRunStatus(run.status, locale)}
+              </Badge>
             </CardHeader>
             <CardTitle data-testid="result-title">
               {run.templateType.replaceAll("_", " ")}

@@ -1,15 +1,10 @@
+// Domain primitives now come from the single source of truth (Round J, audit
+// P0-D2): the web app re-exports @neuroclaw/shared instead of hand-copying.
+import type { ApprovalStatus, RunStatus, RunStepResult, TemplateType } from "@neuroclaw/shared";
+
+export type { ApprovalStatus, RunStatus, RunStepResult, TemplateType };
+
 export type WorkspacePlan = "starter" | "growth";
-
-export type RunStatus =
-  | "draft"
-  | "queued"
-  | "running"
-  | "waiting_approval"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export type TemplateType = "content_acquisition" | "private_conversion" | "weekly_review";
 
 export interface TemplateRecord {
   id: string;
@@ -39,6 +34,9 @@ export interface RunRecord {
   currentStep: string | null;
   approvalStatus: string;
   createdAt?: string;
+  updatedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
   stepResults?: Array<{
     stepId: string;
     status: string;
@@ -69,6 +67,7 @@ export interface ClonedRunPayload {
 export type Route =
   | { name: "onboarding" }
   | { name: "home" }
+  | { name: "cockpit" }
   | { name: "templates" }
   | { name: "profile" }
   | { name: "launch"; query?: string }
@@ -78,13 +77,15 @@ export type Route =
   | { name: "library" }
   | { name: "knowledge" }
   | { name: "team" }
-  | { name: "team-detail"; teamId: string }
   | { name: "team-results"; teamId: string }
+  | { name: "team-detail"; teamId: string }
   | { name: "inbox" }
   | { name: "schedule" }
   | { name: "analytics" }
+  | { name: "billing" }
+  | { name: "crews" }
   | { name: "history" }
   | { name: "memory" }
   | { name: "run-setup"; templateType: TemplateType }
-  | { name: "run-status"; runId: string }
-  | { name: "result"; runId: string };
+  | { name: "result"; runId: string }
+  | { name: "run-status"; runId: string };

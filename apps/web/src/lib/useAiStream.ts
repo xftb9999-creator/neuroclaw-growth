@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
+import type { TemplateType } from "../types.js";
+
 export interface StreamState {
   status: "idle" | "connecting" | "streaming" | "done" | "error";
   partial: unknown;
@@ -27,7 +29,7 @@ export function useAiStream(options: UseAiStreamOptions = {}) {
 
   const stream = useCallback(
     async (
-      templateType: "content_acquisition" | "private_conversion" | "weekly_review",
+      templateType: TemplateType,
       input: Record<string, unknown>
     ): Promise<void> => {
       abortRef.current?.abort();
@@ -46,10 +48,7 @@ export function useAiStream(options: UseAiStreamOptions = {}) {
         const response = await fetch("/api/ai/stream", {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
-            ...(process.env.NEUROCLAW_API_KEY
-              ? { Authorization: `Bearer ${process.env.NEUROCLAW_API_KEY}` }
-              : {})
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({ templateType, input }),
           signal: controller.signal

@@ -1,57 +1,97 @@
 import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { approveRun, getRun, listApprovals } from "../lib/api.js";
+import { approveRun, cancelRun, getRun, listApprovals } from "../lib/api.js";
 import { useAiStream } from "../lib/useAiStream.js";
 import { useI18n } from "../lib/i18n.js";
+import { getOperatorId } from "../lib/operator.js";
+import { formatRunStatus } from "../lib/statusLabels.js";
+import { useRunEventStream } from "../lib/useRunEventStream.js";
 import { Button } from "../components/ui/Button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
-import { ErrorBanner, RouteLayout, statusToBadgeVariant } from "../components/Layout.js";
+import { Modal } from "../components/ui/Modal.js";
+import { ErrorBanner, InfoBanner, RouteLayout, statusToBadgeVariant } from "../components/Layout.js";
 import { InputSummaryStrip, PipelineStepper } from "../components/PipelineStepper.js";
+import { ApprovalCard } from "../components/ApprovalCard.js";
 import type { ApprovalRequest, RunRecord } from "../types.js";
+
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 export function RunStatusPage(props: {
   runId: string;
   onViewResult: (runId: string) => void;
   onRunAgain: (run: RunRecord) => void;
 }) {
-  const { t } = useI18n();
-  const [run, setRun] = useState<RunRecord | null>(null);
-  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const { t, locale } = useI18n();
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [undoOpen, setUndoOpen] = useState(false);
 
   const ai = useAiStream({});
 
-  const load = async () => {
-    try {
-      const [runRecord, approvalItems] = await Promise.all([
-        getRun(props.runId),
-        listApprovals(props.runId)
-      ]);
-      setRun(runRecord as RunRecord);
-      setApprovals(approvalItems as ApprovalRequest[]);
-      setError(null);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : t("status.loadError"));
-    } finally {
-      setLoading(false);
-    }
+  const runQuery = useQuery({
+    queryKey: ["run", props.runId],
+    queryFn: async () => getRun(props.runId) as Promise<RunRecord>
+  });
+  const approvalsQuery = useQuery({
+    queryKey: ["approvals", props.runId],
+    queryFn: async () => listApprovals(props.runId) as Promise<ApprovalRequest[]>
+  });
+
+  const run = runQuery.data ?? null;
+  const approvals = approvalsQuery.data ?? [];
+  const loading = runQuery.isPending || approvalsQuery.isPending;
+
+  // Round P/Q: live SSE push primary; 1.2s Query polling only as fallback
+  // (stream disabled/failed) — always paused on hidden tabs.
+  const onStreamUpdate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["run", props.runId] });
+    void queryClient.invalidateQueries({ queryKey: ["approvals", props.runId] });
   };
+  const streamHealth = useRunEventStream({
+    runId: props.runId,
+    enabled: Boolean(run && !TERMINAL_STATUSES.has(run.status)),
+    onUpdate: onStreamUpdate
+  });
 
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.runId]);
-
-  // 运行中每 2.5s 轮询,驱动链路 Stepper 点亮
-  useEffect(() => {
-    if (!run || !["queued", "running"].includes(run.status)) return;
-    const timer = window.setInterval(() => void load(), 2500);
+    const active = Boolean(
+      run && ["queued", "running"].includes(run.status) && streamHealth !== "live"
+    );
+    if (!active) return;
+    const timer = window.setInterval(onStreamUpdate, 1_200);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.status, props.runId]);
+  }, [run?.status, streamHealth]);
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["run", props.runId] });
+    void queryClient.invalidateQueries({ queryKey: ["approvals", props.runId] });
+  };
+
+  const decide = useMutation({
+    mutationFn: async (input: { approved: boolean; note?: string }) => {
+      await approveRun(props.runId, {
+        approved: input.approved,
+        reviewerId: getOperatorId(),
+        note: input.note
+      });
+    },
+    onSuccess: refresh,
+    onError: (mutationError) =>
+      setError(mutationError instanceof Error ? mutationError.message : t("status.loadError")),
+    onSettled: () => setIsUpdating(false)
+  });
+
+  const cancel = useMutation({
+    mutationFn: async () => cancelRun(props.runId),
+    onSuccess: refresh,
+    onError: (cancelError) =>
+      setError(cancelError instanceof Error ? cancelError.message : t("status.loadError")),
+    onSettled: () => setIsUpdating(false)
+  });
 
   const activeApproval = approvals.find((approval) => approval.status === "pending");
 
@@ -74,7 +114,7 @@ export function RunStatusPage(props: {
           <Card>
             <CardHeader>
               <Badge variant={statusToBadgeVariant(run.status)} data-testid="run-status">
-                {run.status}
+                {formatRunStatus(run.status, locale)}
               </Badge>
             </CardHeader>
             <CardContent>
@@ -86,9 +126,9 @@ export function RunStatusPage(props: {
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button variant="ghost" onClick={() => window.history.back()} aria-label={t("common.back")}>
-                  ← {t("common.back")}
+                  �?{t("common.back")}
                 </Button>
-                <Button data-testid="refresh-run" variant="outline" onClick={() => void load()}>
+                <Button data-testid="refresh-run" variant="outline" onClick={refresh}>
                   {t("status.refresh")}
                 </Button>
                 {run.status === "completed" && (
@@ -117,67 +157,54 @@ export function RunStatusPage(props: {
             </CardContent>
           </Card>
 
+          {run.status === "cancelled" && <InfoBanner message={t("approval.cancelledNote")} />}
+
           {activeApproval && (
-            <Card>
-              <CardHeader>
-                <Badge variant="waiting">{t("status.approvalNeeded")}</Badge>
-              </CardHeader>
-              <CardTitle>{activeApproval.actionType}</CardTitle>
-              <CardContent>
-                <p className="text-muted m-0">{activeApproval.reason}</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    data-testid="approve-run"
-                    disabled={isUpdating}
-                    onClick={async () => {
-                      setIsUpdating(true);
-                      try {
-                        const updated = (await approveRun(run.id, {
-                          approved: true,
-                          reviewerId: "operator_1"
-                        })) as RunRecord;
-                        setRun(updated);
-                        await load();
-                      } catch (approveError) {
-                        setError(
-                          approveError instanceof Error ? approveError.message : t("status.loadError")
-                        );
-                      } finally {
-                        setIsUpdating(false);
-                      }
-                    }}
-                  >
-                    {t("status.approve")}
-                  </Button>
-                  <Button
-                    data-testid="reject-run"
-                    variant="secondary"
-                    disabled={isUpdating}
-                    onClick={async () => {
-                      setIsUpdating(true);
-                      try {
-                        const updated = (await approveRun(run.id, {
-                          approved: false,
-                          reviewerId: "operator_1",
-                          note: "Rejected from UI"
-                        })) as RunRecord;
-                        setRun(updated);
-                        await load();
-                      } catch (rejectError) {
-                        setError(
-                          rejectError instanceof Error ? rejectError.message : t("status.loadError")
-                        );
-                      } finally {
-                        setIsUpdating(false);
-                      }
-                    }}
-                  >
-                    {t("status.reject")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <ApprovalCard
+              actionType={activeApproval.actionType}
+              reason={activeApproval.reason}
+              input={run.input}
+              busy={isUpdating}
+              onApprove={async () => {
+                setIsUpdating(true);
+                await decide.mutateAsync({ approved: true });
+              }}
+              onReject={async (reasonLabel) => {
+                setIsUpdating(true);
+                await decide.mutateAsync({ approved: false, note: reasonLabel });
+              }}
+            />
           )}
+
+          {/* 撤回窗口:排队/待审�?执行中均可撤销(Round L) */}
+          {["queued", "running", "waiting_approval"].includes(run.status) && (
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="undo-run"
+                disabled={isUpdating}
+                onClick={() => setUndoOpen(true)}
+              >
+                �?{t("approval.undo")}
+              </Button>
+            </div>
+          )}
+
+          <Modal
+            open={undoOpen}
+            danger
+            title={t("approval.undoConfirmTitle")}
+            confirmLabel={t("approval.undoYes")}
+            onClose={() => setUndoOpen(false)}
+            onConfirm={() => {
+              setUndoOpen(false);
+              setIsUpdating(true);
+              void cancel.mutateAsync();
+            }}
+          >
+            <p className="m-0">{t("approval.undoConfirmBody")}</p>
+          </Modal>
 
           {(run.status === "running" || run.status === "completed") && (
             <section aria-label={t("status.stream.title")}>

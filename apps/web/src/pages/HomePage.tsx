@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { listRunHistory } from "../lib/api.js";
 import { isWorkspaceMissingError } from "../lib/workspace.js";
@@ -13,6 +14,7 @@ import { Button } from "../components/ui/Button.js";
 import { Card } from "../components/ui/Card.js";
 import { Badge, Skeleton } from "../components/ui/Input.js";
 import { ErrorBanner, RouteLayout, statusToBadgeVariant } from "../components/Layout.js";
+import { SevenDayPlanBanner } from "../components/SevenDayPlanBanner.js";
 import type { RunRecord, TemplateType } from "../types.js";
 
 function detectIntent(query: string): TemplateType | null {
@@ -36,34 +38,32 @@ export function HomePage(props: {
   onOpenRun: (runId: string) => void;
 }) {
   const { t } = useI18n();
-  const [runs, setRuns] = useState<RunRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [listening, setListening] = useState(false);
   const voiceSupported = useMemo(() => isVoiceInputSupported(), []);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const load = async () => {
-    try {
-      const items = (await listRunHistory(props.workspaceId)) as RunRecord[];
-      setRuns(items);
-      setError(null);
-    } catch (loadError) {
-      if (isWorkspaceMissingError(loadError)) {
-        props.onWorkspaceMissing(t("history.workspaceExpired"));
-        return;
-      }
-      setError(loadError instanceof Error ? loadError.message : t("history.loadError"));
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Round P: TanStack Query — cached, race-safe, background-tab aware.
+  const runsQuery = useQuery({
+    queryKey: ["runs", props.workspaceId],
+    queryFn: async () => listRunHistory(props.workspaceId) as Promise<RunRecord[]>,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false
+  });
 
   useEffect(() => {
-    void load();
+    if (!runsQuery.error) return;
+    if (isWorkspaceMissingError(runsQuery.error)) {
+      props.onWorkspaceMissing(t("history.workspaceExpired"));
+      return;
+    }
+    setError(runsQuery.error instanceof Error ? runsQuery.error.message : t("history.loadError"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.workspaceId]);
+  }, [runsQuery.error]);
+
+  const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
+  const loading = runsQuery.isPending;
 
   const stats = useMemo(() => {
     const completed = runs.filter((run) => run.status === "completed").length;
@@ -135,6 +135,8 @@ export function HomePage(props: {
   return (
     <RouteLayout title={`${greeting} · ${t("home.title")}`} subtitle={t("home.subtitle")}>
       <ErrorBanner error={error} />
+
+      <SevenDayPlanBanner runs={runs} />
 
       {/* 一句话启动 */}
       <Card className="p-5">

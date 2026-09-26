@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { listPendingApprovals } from "../lib/api.js";
 import { readWorkspaceId } from "../lib/router.js";
@@ -7,6 +8,50 @@ import { Card } from "./ui/Card.js";
 import { LanguageSwitcher, useI18n } from "../lib/i18n.js";
 import { navigate } from "../lib/router.js";
 import type { RunStatus } from "../types.js";
+
+// ---------------------------------------------------------------------------
+// Navigation IA — 3 groups (Round L, audit P0-E5): Growth / Crew / Assets
+// ---------------------------------------------------------------------------
+
+interface NavItem {
+  path: string;
+  labelKey: string;
+}
+
+const NAV_GROUPS: Array<{ key: string; labelKey: string; items: NavItem[] }> = [
+  {
+    key: "growth",
+    labelKey: "nav.group.growth",
+    items: [
+      { path: "/cockpit", labelKey: "common.nav.cockpit" },
+      { path: "/home", labelKey: "common.nav.home" },
+      { path: "/schedule", labelKey: "common.nav.schedule" },
+      { path: "/analytics", labelKey: "common.nav.analytics" },
+      { path: "/billing", labelKey: "nav.billing" }
+    ]
+  },
+  {
+    key: "crew",
+    labelKey: "nav.group.crew",
+    items: [
+      { path: "/crews", labelKey: "nav.crews" },
+      { path: "/agents", labelKey: "common.nav.agents" },
+      { path: "/team", labelKey: "common.nav.team" },
+      { path: "/workflows", labelKey: "common.nav.workflows" }
+    ]
+  },
+  {
+    key: "assets",
+    labelKey: "nav.group.assets",
+    items: [
+      { path: "/profile", labelKey: "common.nav.profile" },
+      { path: "/knowledge", labelKey: "common.nav.knowledge" },
+      { path: "/library", labelKey: "common.nav.library" },
+      { path: "/history", labelKey: "common.nav.history" },
+      { path: "/memory", labelKey: "common.nav.memory" }
+    ]
+  }
+];
 
 function AuroraCanvas() {
   return (
@@ -20,29 +65,37 @@ function AuroraCanvas() {
 
 export function RouteLayout(props: { title: string; subtitle: string; children: ReactNode }) {
   const { t, embed } = useI18n();
-  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Inbox badge (Round P): TanStack Query polling — pauses on hidden tabs.
+  const badgeQuery = useQuery({
+    queryKey: ["pending-approvals-badge"],
+    queryFn: async () => (await listPendingApprovals(readWorkspaceId() ?? undefined)) as unknown[],
+    enabled: !embed,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    staleTime: 10_000
+  });
+  const pendingCount = embed ? 0 : badgeQuery.data?.length ?? 0;
+
+  const goAndClose = (path: string) => {
+    setOpenGroup(null);
+    setMobileOpen(false);
+    navigate(path);
+  };
+
+  useEffect(() => {
+    if (!openGroup) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenGroup(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openGroup]);
 
   useEffect(() => {
     if (embed) return;
-    let cancelled = false;
-    const fetchCount = async () => {
-      try {
-        const items = (await listPendingApprovals(readWorkspaceId() ?? undefined)) as unknown[];
-        if (!cancelled) setPendingCount(items.length);
-      } catch {
-        // silent — badge is best-effort
-      }
-    };
-    void fetchCount();
-    const timer = window.setInterval(fetchCount, 15_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [embed]);
-
-  useEffect(() => {
-    if (!embed) return;
     const post = () => {
       window.parent?.postMessage(
         { type: "neuroclaw:resize", height: document.documentElement.scrollHeight },
@@ -60,11 +113,11 @@ export function RouteLayout(props: { title: string; subtitle: string; children: 
       <AuroraCanvas />
       {!embed && (
         <header className="glass-nav sticky top-0 z-20">
-          <div className="max-w-6xl w-full mx-auto px-6 py-3.5 flex items-center gap-5 flex-wrap max-[900px]:gap-3">
+          <div className="max-w-6xl w-full mx-auto px-6 py-3.5 flex items-center gap-4">
             <button
               type="button"
-              className="brand-mark text-base cursor-pointer bg-transparent border-0 p-0"
-              onClick={() => navigate("/home")}
+              className="brand-mark text-base cursor-pointer bg-transparent border-0 p-0 shrink-0"
+              onClick={() => goAndClose("/home")}
               aria-label={t("common.appName")}
             >
               <span className="brand-glyph" aria-hidden="true" />
@@ -73,68 +126,116 @@ export function RouteLayout(props: { title: string; subtitle: string; children: 
               </span>
             </button>
 
+            {/* Desktop — three grouped dropdowns */}
             <nav
               aria-label="Main navigation"
-              className="flex items-center gap-1 ml-2 flex-wrap"
+              className="relative hidden max-[900px]:hidden min-[901px]:flex items-center gap-1 ml-2"
             >
-              <Button variant="ghost" onClick={() => navigate("/home")}>
-                {t("common.nav.home")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/analytics")}>
-                {t("common.nav.analytics")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/templates")}>
-                {t("common.nav.templates")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/profile")}>
-                {t("common.nav.profile")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/agents")}>
-                {t("common.nav.agents")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/workflows")}>
-                {t("common.nav.workflows")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/team")}>
-                {t("common.nav.team")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/library")}>
-                {t("common.nav.library")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/knowledge")}>
-                {t("common.nav.knowledge")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/history")}>
-                {t("common.nav.history")}
-              </Button>
-              <Button variant="ghost" onClick={() => navigate("/memory")}>
-                {t("common.nav.memory")}
-              </Button>
+              {NAV_GROUPS.map((group) => (
+                <div key={group.key} className="relative">
+                  <Button
+                    variant="ghost"
+                    data-testid={`nav-group-${group.key}`}
+                    aria-haspopup="true"
+                    aria-expanded={openGroup === group.key}
+                    onClick={() => setOpenGroup(openGroup === group.key ? null : group.key)}
+                  >
+                    {t(group.labelKey)} ▾
+                  </Button>
+                  {openGroup === group.key && (
+                    <div
+                      data-testid={`nav-panel-${group.key}`}
+                      className="absolute left-0 top-full mt-1 min-w-[168px] rounded-card bg-white border hairline shadow-lg p-1.5 grid gap-0.5 z-30"
+                    >
+                      {group.items.map((item) => (
+                        <button
+                          key={item.path}
+                          type="button"
+                          className="text-left text-[14px] px-3 py-2 rounded-input hover:bg-surface-strong bg-transparent border-0 cursor-pointer"
+                          onClick={() => goAndClose(item.path)}
+                        >
+                          {t(item.labelKey)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </nav>
+
+            {/* Right cluster — inbox bell + launch CTA + language (+ mobile hamburger) */}
+            <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => navigate("/inbox")}
-                className="relative inline-flex items-center gap-1.5 rounded-pill px-4 py-2 text-[14px] font-medium text-muted hover:text-ink hover:bg-surface-strong cursor-pointer bg-transparent border-0 transition-colors"
+                onClick={() => goAndClose("/inbox")}
+                className="relative inline-flex items-center gap-1.5 rounded-pill px-3.5 py-2 text-[14px] font-medium text-muted hover:text-ink hover:bg-surface-strong cursor-pointer bg-transparent border-0 transition-colors"
                 aria-label={t("inbox.title")}
               >
-                🔔 {t("common.nav.inbox")}
+                🔔
                 {pendingCount > 0 && (
                   <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[11px] font-bold text-white bg-danger rounded-full">
                     {pendingCount}
                   </span>
                 )}
               </button>
-              <Button variant="ghost" onClick={() => navigate("/schedule")}>
-                ⏰ {t("common.nav.schedule")}
-              </Button>
-            </nav>
-
-            <div className="ml-auto flex items-center gap-2.5">
-              <Button size="sm" onClick={() => navigate("/launch")} aria-label={t("launch.title")}>
+              <Button size="sm" className="max-[560px]:hidden" onClick={() => goAndClose("/launch")} aria-label={t("launch.title")}>
                 ✦ {t("launch.title")}
               </Button>
-              <LanguageSwitcher />
+              <span className="max-[900px]:hidden"><LanguageSwitcher /></span>
+              <button
+                type="button"
+                className="min-[901px]:hidden inline-flex items-center justify-center w-9 h-9 rounded-input bg-transparent border border-line cursor-pointer text-[16px]"
+                aria-expanded={mobileOpen}
+                aria-label={mobileOpen ? t("nav.group.closeMenu") : t("nav.group.openMenu")}
+                onClick={() => setMobileOpen((value) => !value)}
+              >
+                {mobileOpen ? "✕" : "☰"}
+              </button>
             </div>
+
+            {openGroup && (
+              <button
+                type="button"
+                aria-hidden="true"
+                tabIndex={-1}
+                className="fixed inset-0 z-10 bg-transparent border-0 cursor-default"
+                onClick={() => setOpenGroup(null)}
+              />
+            )}
           </div>
+
+          {/* Mobile drawer */}
+          {mobileOpen && (
+            <nav
+              aria-label="Mobile navigation"
+              data-testid="mobile-nav"
+              className="min-[901px]:hidden border-t hairline bg-white/95 backdrop-blur px-6 py-4 grid gap-4 max-h-[70vh] overflow-auto"
+            >
+              {NAV_GROUPS.map((group) => (
+                <div key={group.key} className="grid gap-1">
+                  <div className="text-[12px] font-semibold text-muted uppercase tracking-wide">
+                    {t(group.labelKey)}
+                  </div>
+                  {group.items.map((item) => (
+                    <button
+                      key={item.path}
+                      type="button"
+                      className="text-left text-[15px] py-1.5 px-2 rounded-input hover:bg-surface-strong bg-transparent border-0 cursor-pointer"
+                      onClick={() => goAndClose(item.path)}
+                    >
+                      {t(item.labelKey)}
+                    </button>
+                  ))}
+                </div>
+              ))}
+              <div className="flex items-center gap-3 pt-2 border-t hairline">
+                <Button size="sm" onClick={() => goAndClose("/launch")}>
+                  ✦ {t("launch.title")}
+                </Button>
+                <LanguageSwitcher />
+              </div>
+            </nav>
+          )}
         </header>
       )}
 
