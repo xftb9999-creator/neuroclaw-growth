@@ -155,6 +155,66 @@ describe("control-plane http server", () => {
     });
   });
 
+  it("reports database and migration readiness, and fails closed when checks fail", async () => {
+    const service = await ControlPlaneService.create();
+    const app = (await import("./app.js")).createApp(service, staticDir);
+
+    const ready = await app.request("/ready");
+    expect(ready.status).toBe(200);
+    await expect(ready.json()).resolves.toEqual({
+      ok: true,
+      service: "control-plane",
+      checks: { database: "ok", migrations: "ok", coreTables: "ok" }
+    });
+
+    const stalledExecution = (await import("./app.js")).createApp(
+      service,
+      staticDir,
+      { execution: () => false }
+    );
+    const stalledResponse = await stalledExecution.request("/ready");
+    expect(stalledResponse.status).toBe(503);
+    await expect(stalledResponse.json()).resolves.toMatchObject({
+      ok: false,
+      code: "NOT_READY",
+      checks: { database: "ok", migrations: "ok", coreTables: "ok", execution: "failed" }
+    });
+    await service.shutdown();
+
+    const unavailable = (await import("./app.js")).createApp(
+      {
+        db: {
+          execute: async () => {
+            throw new Error("database unavailable");
+          }
+        }
+      } as never,
+      staticDir
+    );
+    const unavailableResponse = await unavailable.request("/ready");
+    expect(unavailableResponse.status).toBe(503);
+    await expect(unavailableResponse.json()).resolves.toEqual({
+      ok: false,
+      service: "control-plane",
+      checks: { database: "failed", migrations: "failed", coreTables: "failed" },
+      code: "NOT_READY"
+    });
+
+    const incomplete = (await import("./app.js")).createApp(
+      {
+        db: { execute: async () => ({ rows: [] }) }
+      } as never,
+      staticDir
+    );
+    const incompleteResponse = await incomplete.request("/ready");
+    expect(incompleteResponse.status).toBe(503);
+    await expect(incompleteResponse.json()).resolves.toMatchObject({
+      ok: false,
+      code: "NOT_READY",
+      checks: { database: "ok", migrations: "failed", coreTables: "failed" }
+    });
+  });
+
   it("gracefully shuts down the server and service via startServer().shutdown()", async () => {
     const runtime = await startServer({ port: 0, hostname: "127.0.0.1", staticDir });
     servers.push(runtime.httpServer);
@@ -168,6 +228,13 @@ describe("control-plane http server", () => {
     const baseUrl = `http://127.0.0.1:${address.port}`;
     const health = await fetch(`${baseUrl}/health`);
     expect(health.status).toBe(200);
+
+    const readiness = await fetch(`${baseUrl}/ready`);
+    expect(readiness.status).toBe(200);
+    await expect(readiness.json()).resolves.toMatchObject({
+      ok: true,
+      checks: { database: "ok", migrations: "ok", coreTables: "ok", execution: "ok" }
+    });
 
     // Initiate graceful shutdown — should not throw and should close the server.
     await runtime.shutdown();

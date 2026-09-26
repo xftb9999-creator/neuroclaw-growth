@@ -54,23 +54,28 @@ export function createAuditMiddleware(db: Database) {
 
     if (pathname === "/health" || pathname === "/ready") return;
 
+    // Streaming endpoints (Round Q): cloning an SSE response and awaiting
+    // its body deadlocks the request until stream close — never audit those.
+    if (pathname.endsWith("/events")) return;
+
+    const contentType = c.res.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) return;
+
     const category = categorizeRequest(method, pathname);
     if (!category) return;
 
     const actorId = c.get("authUserId") ?? "anonymous";
     const status = c.res.status;
+    // Safe to clone here: streaming/non-JSON responses returned earlier.
     const responseClone = c.res.clone();
     let resourceId: string | undefined;
     let workspaceId: string | undefined;
 
     if (status >= 200 && status < 300) {
       try {
-        const body = await responseClone.json();
+        const body = (await responseClone.json()) as { id?: string; workspaceId?: string };
         resourceId = body?.id;
         workspaceId = body?.workspaceId;
-        if (!workspaceId && body?.workspaceId) {
-          workspaceId = body.workspaceId;
-        }
       } catch {
         // Not JSON or empty body
       }
