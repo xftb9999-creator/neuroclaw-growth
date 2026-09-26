@@ -61,6 +61,23 @@ export const outboxDeliveryBodySchema = z
 export type OutboxDeliveryBody = z.infer<typeof outboxDeliveryBodySchema>;
 
 /**
+ * F2 (acceptance note, 2026-09-27): "no recipient" has three producer
+ * spellings — explicit `undefined`, the key omitted, and `""` — and zod4
+ * preserves the explicit `undefined` key while `canonicalJson` serializes the
+ * `undefined` leaf as `null`, so one logical delivery previously produced
+ * three different body digests (and thus three different dedup keys). Normalize
+ * all three to "key omitted" before hashing or sending. `canonicalJson` itself
+ * is shared with capability matching and is deliberately left untouched.
+ */
+function normalizeDeliveryBody(body: OutboxDeliveryBody): OutboxDeliveryBody {
+  if (body.recipientEmail === undefined || body.recipientEmail === "") {
+    const { recipientEmail: _dropped, ...rest } = body;
+    return rest;
+  }
+  return body;
+}
+
+/**
  * B1 §2.1 key format:
  * `run:{runId}:action:{actionType}:rcpt:{sha256(recipientEmail ?? "")[0:8]}:body:{sha256(canonicalJson(body))[0:16]}`
  *
@@ -68,7 +85,7 @@ export type OutboxDeliveryBody = z.infer<typeof outboxDeliveryBodySchema>;
  * full digest in `request_hash`.
  */
 export function computeOutboxDeliveryIdempotencyKey(deliveryBody: OutboxDeliveryBody): string {
-  const body = outboxDeliveryBodySchema.parse(deliveryBody);
+  const body = normalizeDeliveryBody(outboxDeliveryBodySchema.parse(deliveryBody));
   const recipientHash = sha256Hex(body.recipientEmail ?? "").slice(0, 8);
   const bodyHash = sha256Hex(canonicalJson(body)).slice(0, 16);
   return `run:${body.runId}:action:${body.actionType}:rcpt:${recipientHash}:body:${bodyHash}`;
@@ -93,7 +110,9 @@ export function buildOutboxDeliveryIntent(input: {
   transport: OutboxDeliveryTransportKind;
   body: OutboxDeliveryBody;
 }): OutboxDeliveryIntent {
-  const body = outboxDeliveryBodySchema.parse(input.body);
+  // F2: normalize so the body that is hashed, the body persisted in the
+  // payload, and the body handed to the transport are the same object.
+  const body = normalizeDeliveryBody(outboxDeliveryBodySchema.parse(input.body));
   return {
     transport: input.transport,
     body,

@@ -43,6 +43,8 @@ export const OUTBOX_DISPATCH_LEASE_MS_DEFAULT = 60_000;
 export const OUTBOX_DISPATCH_BATCH_SIZE_DEFAULT = 20;
 export const OUTBOX_RETRY_BASE_MS = 30_000;
 export const OUTBOX_RETRY_MAX_MS = 30 * 60_000;
+/** W2 §2.4 driver cadence (injectable; tests override it). */
+export const OUTBOX_DISPATCH_INTERVAL_MS_DEFAULT = 5_000;
 
 export interface OutboxDispatchConfig {
   /** Kill switch: only the literal `"1"` enables dispatch. Default: off. */
@@ -72,6 +74,24 @@ function parseJson(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * F1 fix: mirror the replayed event key into its persisted delivery intent.
+ *
+ * The dispatcher refuses to deliver when `deliveryIntent.idempotencyKey` does
+ * not equal `outbox_events.idempotency_key` (anti-tamper, `processOne`). A
+ * replay suffixes the event key, so the payload must be rewritten with the
+ * *same* suffixed key or the replayed event can never be delivered. Non
+ * delivery payloads (no parseable `deliveryIntent`) are copied untouched; all
+ * other intent fields, including the original base key lineage, are preserved.
+ */
+function recomputeReplayPayload(payloadText: string, idempotencyKey: string): string {
+  const parsed = outboxDeliveryPayloadSchema.safeParse(parseJson(payloadText));
+  if (!parsed.success) return payloadText;
+  return JSON.stringify({
+    deliveryIntent: { ...parsed.data.deliveryIntent, idempotencyKey }
+  });
 }
 
 export type OutboxDispatchReason =
@@ -148,6 +168,16 @@ export class OutboxDeliveryStore {
       .from(outboxDeliveryAttempts)
       .where(eq(outboxDeliveryAttempts.eventId, eventId))
       .orderBy(asc(outboxDeliveryAttempts.attemptNumber));
+  }
+
+  /** Single event by id (replay route: 404/409 mapping + targeted dispatch). */
+  async getEvent(eventId: string): Promise<OutboxEventRow | null> {
+    const rows = await this.db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.eventId, eventId))
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   async hasSucceededAttemptForKey(idempotencyKey: string): Promise<boolean> {
@@ -246,14 +276,15 @@ export class OutboxDeliveryStore {
    * Dead-letter replay (B1 §2.3): FAILED is terminal, so replay appends a new
    * event — new `eventId`, `idempotencyKey` suffixed with `:replay:{nonce}`,
    * `causationId` = old eventId — and never touches the old row.
+   *
+   * F1 fix (2026-09-27): the replayed event key must also be mirrored into the
+   * persisted `deliveryIntent.idempotencyKey` (see `recomputeReplayPayload`).
+   * The dispatcher rejects any intent whose key differs from the outbox key as
+   * tampered; without the mirror, every replay dead-lettered on its first
+   * dispatch pass (`transportCalls=0`).
    */
   async replay(eventId: string, now: Date = new Date()): Promise<OutboxEventRow> {
-    const rows = await this.db
-      .select()
-      .from(outboxEvents)
-      .where(eq(outboxEvents.eventId, eventId))
-      .limit(1);
-    const previous = rows[0];
+    const previous = await this.getEvent(eventId);
     if (!previous) throw new Error(`Outbox event not found: ${eventId}`);
     if (previous.status !== "FAILED") {
       throw new Error(
@@ -261,10 +292,12 @@ export class OutboxDeliveryStore {
       );
     }
     const nowIso = now.toISOString();
+    const idempotencyKey = `${previous.idempotencyKey}:replay:${randomUUID()}`;
     const replayed: OutboxEventRow = {
       ...previous,
       eventId: `outbox_${randomUUID()}`,
-      idempotencyKey: `${previous.idempotencyKey}:replay:${randomUUID()}`,
+      idempotencyKey,
+      payload: recomputeReplayPayload(previous.payload, idempotencyKey),
       causationId: previous.eventId,
       status: "PENDING",
       createdAt: nowIso,
@@ -324,12 +357,8 @@ export class OutboxDispatcher {
     return this.enabled;
   }
 
-  /**
-   * One drain pass. Disabled dispatcher is a strict no-op: no claim, no
-   * transport call, no status change.
-   */
-  async processBatch(): Promise<OutboxDispatchBatchResult> {
-    const result: OutboxDispatchBatchResult = {
+  private newBatchResult(): OutboxDispatchBatchResult {
+    return {
       disabled: !this.enabled,
       scanned: 0,
       delivered: 0,
@@ -338,6 +367,14 @@ export class OutboxDispatcher {
       skipped: 0,
       errors: []
     };
+  }
+
+  /**
+   * One drain pass. Disabled dispatcher is a strict no-op: no claim, no
+   * transport call, no status change.
+   */
+  async processBatch(): Promise<OutboxDispatchBatchResult> {
+    const result = this.newBatchResult();
     if (!this.enabled) return result;
 
     const now = this.now();
@@ -346,6 +383,23 @@ export class OutboxDispatcher {
     for (const event of candidates) {
       await this.processOne(event, now, result);
     }
+    return result;
+  }
+
+  /**
+   * Deliver one specific event now — the manual replay path's immediate
+   * attempt. Same eligibility/claim/journal/terminal semantics as
+   * `processBatch`, scoped to `eventId`; `null` when the event no longer
+   * exists (the replay route maps that to 404 before calling this).
+   */
+  async dispatchEvent(eventId: string): Promise<OutboxDispatchBatchResult | null> {
+    const result = this.newBatchResult();
+    if (!this.enabled) return result;
+
+    const event = await this.store.getEvent(eventId);
+    if (!event) return null;
+    result.scanned = 1;
+    await this.processOne(event, this.now(), result);
     return result;
   }
 
@@ -508,4 +562,96 @@ export class OutboxDispatcher {
     }
     return "retried";
   }
+}
+
+export interface OutboxDispatchDriverOptions {
+  db: Database;
+  transport: OutboxTransport;
+  /** Kill switch: only an explicit `true` arms the interval (default false). */
+  enabled?: boolean;
+  /** Timer cadence; defaults to `OUTBOX_DISPATCH_INTERVAL_MS_DEFAULT`. */
+  intervalMs?: number;
+  maxAttempts?: number;
+  leaseMs?: number;
+  batchSize?: number;
+  /** Injectable clock (retry/lease math); defaults to wall clock. */
+  now?: () => Date;
+  jitter?: (delayMs: number) => number;
+  onBatch?: (result: OutboxDispatchBatchResult) => void;
+  onError?: (error: unknown) => void;
+}
+
+export interface OutboxDispatchDriver {
+  readonly dispatcher: OutboxDispatcher;
+  /** True while the interval timer is armed (false == default-off / stopped). */
+  readonly isRunning: boolean;
+  /**
+   * Run one batch immediately (ops/test seam, independent of the timer).
+   * Returns `null` when a previous tick is still in flight.
+   */
+  tick(): Promise<OutboxDispatchBatchResult | null>;
+  /** Idempotent: clears the interval; in-flight ticks are left to finish. */
+  stop(): void;
+}
+
+/**
+ * W2 §2.4 periodic driver: the `setInterval` loop the control-plane server
+ * runs alongside the job loop, wired in `server.ts`. Default-off — the timer
+ * only arms on an explicit `enabled: true`, which the server derives from the
+ * `NEUROCLAW_OUTBOX_DISPATCH_ENABLED === "1"` kill switch. `now` and
+ * `intervalMs` are injectable so tests can drive dispatches deterministically
+ * without wall-clock waits.
+ */
+export function startOutboxDispatchDriver(
+  options: OutboxDispatchDriverOptions
+): OutboxDispatchDriver {
+  const dispatcher = new OutboxDispatcher({
+    db: options.db,
+    transport: options.transport,
+    enabled: options.enabled ?? false,
+    maxAttempts: options.maxAttempts,
+    leaseMs: options.leaseMs,
+    batchSize: options.batchSize,
+    now: options.now,
+    jitter: options.jitter
+  });
+  const intervalMs = options.intervalMs ?? OUTBOX_DISPATCH_INTERVAL_MS_DEFAULT;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let ticking = false;
+
+  const tick = async (): Promise<OutboxDispatchBatchResult | null> => {
+    if (ticking) return null;
+    ticking = true;
+    try {
+      const result = await dispatcher.processBatch();
+      options.onBatch?.(result);
+      return result;
+    } catch (error) {
+      options.onError?.(error);
+      return null;
+    } finally {
+      ticking = false;
+    }
+  };
+
+  if (options.enabled === true) {
+    timer = setInterval(() => {
+      void tick();
+    }, intervalMs);
+    timer.unref?.();
+  }
+
+  return {
+    dispatcher,
+    get isRunning() {
+      return timer !== null;
+    },
+    tick,
+    stop() {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+  };
 }

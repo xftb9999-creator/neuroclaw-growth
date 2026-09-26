@@ -220,6 +220,9 @@ describe("control-plane http server", () => {
     servers.push(runtime.httpServer);
 
     await once(runtime.httpServer, "listening");
+    // W2 driver wiring: no transport injected → default-off driver, kill
+    // switch irrelevant (this slice never starts a real transport).
+    expect(runtime.outboxDispatchDriver).toBeNull();
     const address = runtime.httpServer.address();
     if (!address || typeof address === "string") {
       throw new Error("Missing server address");
@@ -241,5 +244,31 @@ describe("control-plane http server", () => {
 
     // After shutdown, the server should reject new connections.
     await expect(fetch(`${baseUrl}/health`)).rejects.toThrow();
+  });
+
+  it("arms the outbox dispatch driver only with the kill switch AND an injected transport", async () => {
+    const { InMemoryTransport } = await import("@neuroclaw/shared");
+    const { OUTBOX_DISPATCH_ENABLED_ENV } = await import("./outbox-dispatcher.js");
+    const original = process.env[OUTBOX_DISPATCH_ENABLED_ENV];
+    try {
+      process.env[OUTBOX_DISPATCH_ENABLED_ENV] = "1";
+      const runtime = await startServer({
+        port: 0,
+        hostname: "127.0.0.1",
+        staticDir,
+        outbox: { transport: new InMemoryTransport(), intervalMs: 60_000 }
+      });
+      servers.push(runtime.httpServer);
+      await once(runtime.httpServer, "listening");
+
+      expect(runtime.outboxDispatchDriver).not.toBeNull();
+      expect(runtime.outboxDispatchDriver!.isRunning).toBe(true);
+
+      await runtime.shutdown();
+      expect(runtime.outboxDispatchDriver!.isRunning).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env[OUTBOX_DISPATCH_ENABLED_ENV];
+      else process.env[OUTBOX_DISPATCH_ENABLED_ENV] = original;
+    }
   });
 });

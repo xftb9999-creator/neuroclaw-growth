@@ -496,7 +496,10 @@ export const rolePermissions: Record<Role, readonly string[]> = {
     "integration:read",
     "integration:validate",
     "registry:read",
-    "registry:write"
+    "registry:write",
+    // W2 §2.3 dead-letter replay: admin-only, fail-closed (503 unless the
+    // dispatch kill switch is on). No operator/viewer grant on purpose.
+    "outbox:replay"
   ],
   operator: [
     "workspace:read",

@@ -4,10 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { flushOtel, initOtel, shutdownOtel } from "@neuroclaw/observability";
+import type { OutboxTransport } from "@neuroclaw/shared";
 
 import { ControlPlaneService } from "./index.js";
 import { createApp } from "./app.js";
 import { getApiKeys } from "./middleware/auth.js";
+import {
+  OUTBOX_DISPATCH_INTERVAL_MS_DEFAULT,
+  resolveOutboxDispatchConfig,
+  startOutboxDispatchDriver,
+  type OutboxDispatchDriver
+} from "./outbox-dispatcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Resolves to <repo>/apps/web/dist both from src (vitest) and from compiled
@@ -97,6 +104,11 @@ export function createHttpServer(
 export interface ServerRuntime {
   service: ControlPlaneService;
   httpServer: ServerType;
+  /**
+   * W2 §2.4 outbox dispatch driver. `null` whenever the kill switch is off
+   * (default) or the switch is on but no transport is available.
+   */
+  outboxDispatchDriver: OutboxDispatchDriver | null;
   shutdown: () => Promise<void>;
 }
 
@@ -104,6 +116,17 @@ export async function startServer(options: {
   port?: number;
   hostname?: string;
   staticDir?: string;
+  /**
+   * Outbox dispatch seam (W2 §2.4). `transport` is an injection point for
+   * tests/ops: this slice authorizes no real transports (stop-line), so with
+   * the kill switch on and no transport injected, the driver stays off and the
+   * server logs a warning instead of faking or failing deliveries.
+   */
+  outbox?: {
+    transport?: OutboxTransport;
+    intervalMs?: number;
+    now?: () => Date;
+  };
 } = {}): Promise<ServerRuntime> {
   const port = options.port ?? Number(process.env.PORT ?? 8787);
   const hostname = options.hostname ?? process.env.HOST ?? "0.0.0.0";
@@ -129,12 +152,21 @@ export async function startServer(options: {
   let shuttingDown = false;
   let jobLoopHealthy = true;
   let lastJobLoopTickAt = Date.now();
-  const app = createApp(service, staticDir, {
-    execution: () =>
-      !shuttingDown &&
-      jobLoopHealthy &&
-      Date.now() - lastJobLoopTickAt <= 5_000
-  });
+  const app = createApp(
+    service,
+    staticDir,
+    {
+      execution: () =>
+        !shuttingDown &&
+        jobLoopHealthy &&
+        Date.now() - lastJobLoopTickAt <= 5_000
+    },
+    {
+      // W2 §2.3 replay seam: same injected transport that may arm the driver.
+      transport: options.outbox?.transport,
+      now: options.outbox?.now
+    }
+  );
 
   // Warm up hot statement paths BEFORE accepting traffic (Round O): with
   // embedded Postgres the first executes pay a one-shot JIT/WASM cost that
@@ -199,6 +231,34 @@ export async function startServer(options: {
   }, 30_000);
   schedulerTimer.unref?.();
 
+  // W2 §2.4 outbox dispatch driver — strictly default-off. Only the explicit
+  // `NEUROCLAW_OUTBOX_DISPATCH_ENABLED=1` kill switch arms it, and even then
+  // only when a transport is injected: this slice authorizes no real network
+  // transport, so with the switch on and no transport the driver stays off and
+  // logs a warning instead of faking or failing deliveries.
+  const outboxDispatchConfig = resolveOutboxDispatchConfig();
+  let outboxDispatchDriver: OutboxDispatchDriver | null = null;
+  if (outboxDispatchConfig.enabled) {
+    if (options.outbox?.transport) {
+      const intervalMs = options.outbox.intervalMs ?? OUTBOX_DISPATCH_INTERVAL_MS_DEFAULT;
+      outboxDispatchDriver = startOutboxDispatchDriver({
+        db: service.db,
+        transport: options.outbox.transport,
+        enabled: true,
+        intervalMs,
+        maxAttempts: outboxDispatchConfig.maxAttempts,
+        now: options.outbox.now
+      });
+      console.log(
+        `[outbox] dispatch driver armed (interval ${intervalMs}ms, maxAttempts ${outboxDispatchConfig.maxAttempts})`
+      );
+    } else {
+      console.warn(
+        "[outbox] NEUROCLAW_OUTBOX_DISPATCH_ENABLED=1 but no transport was injected; dispatcher stays off (no real transport is authorized in this slice)."
+      );
+    }
+  }
+
   const httpServer = serve(
     {
       fetch: app.fetch,
@@ -218,6 +278,7 @@ export async function startServer(options: {
     clearInterval(schedulerTimer);
     clearInterval(jobLoopTimer);
     clearInterval(recoveryTimer);
+    outboxDispatchDriver?.stop();
 
     // 1. Stop accepting new connections (drain in-flight requests with a timeout)
     await new Promise<void>((resolve) => {
@@ -265,7 +326,7 @@ export async function startServer(options: {
   process.on("SIGINT", () => signalHandler("SIGINT"));
   process.on("SIGTERM", () => signalHandler("SIGTERM"));
 
-  return { service, httpServer, shutdown };
+  return { service, httpServer, outboxDispatchDriver, shutdown };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

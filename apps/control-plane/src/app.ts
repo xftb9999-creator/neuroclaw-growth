@@ -31,6 +31,7 @@ import {
   updateMemoryInputSchema,
   workspacePlanSchema,
   rebuildRunFromEvents,
+  type OutboxTransport,
   type Run
 } from "@neuroclaw/shared";
 import { isMcpAvailable, getMcpRegistry } from "@neuroclaw/tooling-mcp";
@@ -43,6 +44,12 @@ import {
 } from "./index.js";
 import { requireAuth, requirePermission } from "./middleware/auth.js";
 import { createAuditMiddleware } from "./middleware/audit.js";
+import {
+  OutboxDeliveryStore,
+  OutboxDispatcher,
+  resolveOutboxDispatchConfig,
+  type OutboxDispatchBatchResult
+} from "./outbox-dispatcher.js";
 
 export type AppEnv = {
   Variables: {
@@ -124,6 +131,19 @@ export interface ReadinessHooks {
 }
 
 /**
+ * W2 §2.3 dead-letter replay seam. The server passes the same injected
+ * transport that arms the dispatch driver; with no transport the replay is
+ * still recorded and the response reports `dispatch: null` (this slice
+ * authorizes no real network transport).
+ */
+export interface OutboxRouteSeam {
+  /** Transport for the replay route's immediate delivery attempt. */
+  transport?: OutboxTransport;
+  /** Injectable clock for tests; defaults to the wall clock. */
+  now?: () => Date;
+}
+
+/**
  * Readiness is deliberately stricter than liveness: a process can be alive
  * while its database is unavailable or migrations are incomplete. Keep the
  * response generic on failure so database/provider details do not leak.
@@ -170,7 +190,8 @@ async function checkReadiness(
 export function createApp(
   service: ControlPlaneService,
   staticDir?: string,
-  readinessHooks: ReadinessHooks = {}
+  readinessHooks: ReadinessHooks = {},
+  outboxSeam: OutboxRouteSeam = {}
 ) {
   const app = new Hono<AppEnv>();
 
@@ -1353,6 +1374,84 @@ export function createApp(
       return registryReadFailure(c, error);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // W2 §2.3 · dead-letter replay — append-only, admin-only, fail-closed.
+  //
+  // Kill switch off → 503 before touching the store (fail-closed). On: append
+  // a new event (`:replay:{nonce}` key, causationId = old eventId; FAILED rows
+  // are never resurrected) and attempt immediate delivery through the injected
+  // transport. No real transport exists in this slice: without one, the replay
+  // is recorded and `dispatch` is null — never a fake send.
+  // -------------------------------------------------------------------------
+
+  api.post(
+    "/outbox/:eventId/replay",
+    requirePermission("outbox:replay"),
+    async (c) => {
+      const dispatchConfig = resolveOutboxDispatchConfig();
+      if (!dispatchConfig.enabled) {
+        return c.json(
+          {
+            message:
+              'Outbox dispatch is not enabled (NEUROCLAW_OUTBOX_DISPATCH_ENABLED must be "1"); replay is refused.',
+            code: "OUTBOX_DISPATCH_DISABLED"
+          },
+          503
+        );
+      }
+
+      const eventId = c.req.param("eventId");
+      const store = new OutboxDeliveryStore(service.db);
+      const existing = await store.getEvent(eventId);
+      if (!existing) {
+        return c.json(
+          { message: `Outbox event not found: ${eventId}`, code: "OUTBOX_EVENT_NOT_FOUND" },
+          404
+        );
+      }
+      if (existing.status !== "FAILED") {
+        // FAILED is the only replayable terminal state (append-only: no
+        // resurrection, no duplicate send of a live or completed event).
+        return c.json(
+          {
+            message: `Only FAILED outbox events can be replayed; '${eventId}' is ${existing.status}`,
+            code: "OUTBOX_REPLAY_CONFLICT"
+          },
+          409
+        );
+      }
+
+      const replayed = await store.replay(eventId, outboxSeam.now?.() ?? new Date());
+
+      let dispatch: OutboxDispatchBatchResult | null = null;
+      if (outboxSeam.transport) {
+        dispatch = await new OutboxDispatcher({
+          db: service.db,
+          transport: outboxSeam.transport,
+          enabled: true,
+          maxAttempts: dispatchConfig.maxAttempts,
+          now: outboxSeam.now
+        }).dispatchEvent(replayed.eventId);
+      }
+      const finalEvent = dispatch
+        ? ((await store.getEvent(replayed.eventId)) ?? replayed)
+        : replayed;
+
+      return c.json(
+        {
+          replayed: {
+            eventId: finalEvent.eventId,
+            idempotencyKey: finalEvent.idempotencyKey,
+            causationId: finalEvent.causationId,
+            status: finalEvent.status
+          },
+          dispatch
+        },
+        200
+      );
+    }
+  );
 
   app.route("/api", api);
 
