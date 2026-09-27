@@ -1554,17 +1554,6 @@ export const TEAM_PLAYBOOKS: Record<string, TeamStep[]> = {
   ]
 };
 
-function carriedSummary(payload: Record<string, unknown>, feedFrom: string[]): string {
-  return feedFrom
-    .map((field) => {
-      const value = payload[field];
-      if (Array.isArray(value)) return value.join("; ");
-      return typeof value === "string" ? value : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 /**
  * AW-5 片1（GM 裁决②）: 注册边界 fail-closed 解析。
  * shared 层仅宽松 string 承载 role；此处用 contract §1 枚举严格校验，
@@ -5530,6 +5519,9 @@ export class ControlPlaneService {
     // 先按契约构建并校验 handoffPayload；校验失败 ⇒ 本步零 run 创建，
     // relay 置 failed 并抛错（拒绝路径，不再走字符串盲拼）。
     let handoffPayload: Record<string, unknown> | null = null;
+    // AW-5 片3（判据②）：交接通过后冻结事件三字段（fromTask/toTask/fields），
+    // 待下游 run 真正落地后再发射（「交接已生效」才是事实）。
+    let handoffEvent: { fromTask: string; toTask: string; fields: string[] } | null = null;
     if (runIds.length > 0 && step.feedFrom.length > 0) {
       const { result } = await this.buildTeamHandoff(step, stepIndex, runIds[runIds.length - 1]);
       if (!result.ok) {
@@ -5559,6 +5551,11 @@ export class ControlPlaneService {
       }
       if (result.acceptedFields.length > 0) {
         handoffPayload = result.accepted;
+        handoffEvent = {
+          fromTask: result.fromTask,
+          toTask: result.toTask,
+          fields: result.acceptedFields
+        };
       }
     }
 
@@ -5576,7 +5573,9 @@ export class ControlPlaneService {
             : step.templateType === "private_conversion"
               ? { offerAsset: "团队接力 offer" }
               : { metricsWindowDays: 7 }),
-          // AW-5 片2：结构化交接载荷（已按契约校验；替代字符串拼接路径）。
+          // AW-5 片2/片3（判据④）：交接唯一通道＝结构化 handoffPayload（已按契约
+          // 校验）。R1 消费面缺口：下游 prompt builder（agent-core）暂未读取该键，
+          // 接线属后续批——本批如实记录缺口，不扩写集。
           ...(handoffPayload ? { handoffPayload } : {}),
           // Thread the crew-team linkage so step runs carry teamId (Round V).
           ...((team as { teamId?: string | null }).teamId
@@ -5592,6 +5591,25 @@ export class ControlPlaneService {
         .set({ status: "failed", updatedAt: new Date().toISOString() })
         .where(eq(teamRuns.id, relayId));
       throw error;
+    }
+
+    // AW-5 片3（判据②）：交接事件发射，payload 冻结 `{fromTask, toTask, fields}`。
+    // 通道＝traceLog（现有 relay 级事件通道，片2 拒绝事件同通道）。刻意不入
+    // run_events：该日志为 worker 运行流专用（runtimeEventSchema 封闭枚举、
+    // SSE/回放按 growth.run.* 投影），relay 级事件入该通道会污染投影。
+    if (handoffEvent) {
+      this.traceLog.record({
+        scope: "control-plane",
+        action: "team_handoff_accepted",
+        metadata: {
+          relayId,
+          stepIndex: String(stepIndex),
+          fromTask: handoffEvent.fromTask,
+          toTask: handoffEvent.toTask,
+          fields: JSON.stringify(handoffEvent.fields),
+          downstreamRunId: run.id
+        }
+      });
     }
 
     if (run.status === "completed") {
@@ -5804,14 +5822,9 @@ export class ControlPlaneService {
     await this.launchTeamStep(relayId);
   }
 
-  private async getCarriedPayload(
-    runId: string,
-    feedFrom: string[]
-  ): Promise<string> {
-    const run = await this.getRun(runId);
-    const payload = run.outputPayload ?? {};
-    return carriedSummary(payload, feedFrom);
-  }
+  // AW-5 片3（判据④）：旧「carried 文本拼接」通道已整体移除——唯一消费方
+  // launchTeamStep 自片2 起走结构化 handoffPayload（按契约校验后注入），
+  // 本处不再保留字符串拼接路径。
 
   async getTeam(teamId: string) {
     const rows = await this.db.select().from(teamRuns).where(eq(teamRuns.id, teamId));
