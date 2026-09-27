@@ -255,12 +255,12 @@ describe("agentProfileSchema 门禁", () => {
     expect(agentProfileSchema.safeParse(contentEditor).success).toBe(true);
   });
 
-  it("6 过渡键位被接受（过渡默认）", () => {
+  it("6 过渡键位被接受（RG-2 三字段已收紧为合法空值）", () => {
     const withDefaults = {
       ...contentEditor,
       skills: [],
       tools: [],
-      permissions: {},
+      permissions: { readScopes: [], writeScopes: [], maxRiskClass: "LOW", requiresApprovalFor: [] },
       memoryScope: {},
       kpi: [],
       escalation: {}

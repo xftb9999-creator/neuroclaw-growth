@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "entries": [
+    {
+      "capabilityRef": "content_acquisition",
+      "kind": "template",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/templates/src/index.ts:34-132"
+    },
+    {
+      "capabilityRef": "private_conversion",
+      "kind": "template",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/templates/src/index.ts:34-132"
+    },
+    {
+      "capabilityRef": "weekly_review",
+      "kind": "template",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/templates/src/index.ts:34-132"
+    },
+    {
+      "capabilityRef": "browser_extract",
+      "kind": "action",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/index.ts:65-72"
+    },
+    {
+      "capabilityRef": "mcp_generate_brief",
+      "kind": "action",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/index.ts:65-72"
+    },
+    {
+      "capabilityRef": "mcp_generate_conversion_copy",
+      "kind": "action",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/index.ts:65-72"
+    },
+    {
+      "capabilityRef": "mcp_generate_review",
+      "kind": "action",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/index.ts:65-72"
+    },
+    {
+      "capabilityRef": "notification_send_preview",
+      "kind": "action",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/index.ts:65-72"
+    },
+    {
+      "capabilityRef": "capability_growth_simulation",
+      "kind": "capability_ref",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/universal-contracts.ts:2946"
+    },
+    {
+      "capabilityRef": "capability_evidence_capture",
+      "kind": "capability_ref",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/project-integration.ts:67"
+    },
+    {
+      "capabilityRef": "capability_receipt_emit",
+      "kind": "capability_ref",
+      "status": "AVAILABLE",
+      "evidenceLevel": "E3",
+      "source": "packages/shared/src/project-integration.ts:67"
+    },
+    {
+      "capabilityRef": "capability_channel_publish_xiaohongshu",
+      "kind": "capability_ref",
+      "status": "MISSING",
+      "evidenceLevel": "E0",
+      "source": ".artifacts/i035-role-grid/proposal.md:64（TODO-3，L2 缺失）"
+    },
+    {
+      "capabilityRef": "capability_compliance_tos_check",
+      "kind": "capability_ref",
+      "status": "MISSING",
+      "evidenceLevel": "E0",
+      "source": ".artifacts/gm-report-20260922/agent-workforce.md:607（TODO-4，无实现）"
+    },
+    {
+      "capabilityRef": "capability_ratelimit_enforce",
+      "kind": "capability_ref",
+      "status": "MISSING",
+      "evidenceLevel": "E0",
+      "source": ".artifacts/gm-report-20260922/agent-workforce.md:607（TODO-4，无实现）"
+    }
+  ]
+}
