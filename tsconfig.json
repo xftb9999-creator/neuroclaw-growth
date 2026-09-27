@@ -34,6 +34,9 @@
                            "path":  "./packages/plugin-contract/tsconfig.json"
                        },
                        {
+                           "path":  "./packages/plugin-host/tsconfig.json"
+                       },
+                       {
                            "path":  "./apps/runtime-worker/tsconfig.json"
                        },
                        {

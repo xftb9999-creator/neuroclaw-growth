@@ -35,6 +35,7 @@ import {
   type Run
 } from "@neuroclaw/shared";
 import { isMcpAvailable, getMcpRegistry } from "@neuroclaw/tooling-mcp";
+import { bootstrapPluginHost, resolvePluginHostConfig, type PluginHost } from "@neuroclaw/plugin-host";
 import { artifacts, knowledgeEntries, memoryRecords, MIGRATIONS } from "@neuroclaw/db";
 import {
   ControlPlaneService,
@@ -194,6 +195,14 @@ export function createApp(
   outboxSeam: OutboxRouteSeam = {}
 ) {
   const app = new Hono<AppEnv>();
+
+  // P2-1 · PluginHost bootstrap — 唯一挂载点（不改既有路由）。
+  // 扫描/校验/注册在宿主默认启动路径上执行（startServer → createApp），无开关；
+  // 动态 import 仅对显式 allowlist（NEUROCLAW_PLUGIN_HOST_ENABLED，默认空）中的
+  // 插件进行；首次 enabled=true 运行期装载属 G1 定点确认（p2-readiness §4）。
+  // init 为 fail-safe：不合法清单不进入 registry、永不触达 import。
+  const pluginHost = bootstrapPluginHost(resolvePluginHostConfig());
+  (app as AppWithPluginHost).pluginHost = pluginHost;
 
   app.use("*", logger());
   app.use("*", secureHeaders());
@@ -1567,3 +1576,6 @@ function getMimeType(filePath: string): string {
 }
 
 export type App = ReturnType<typeof createApp>;
+
+/** createApp 挂载的 PluginHost 实例（P2-1；装载初始化在默认启动路径上执行）。 */
+export type AppWithPluginHost = App & { pluginHost: PluginHost };

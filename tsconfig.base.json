@@ -35,6 +35,12 @@
       "@neuroclaw/agent-workforce-contract": [
         "./packages/agent-workforce-contract/src/index.ts"
       ],
+      "@neuroclaw/plugin-contract": [
+        "./packages/plugin-contract/src/index.ts"
+      ],
+      "@neuroclaw/plugin-host": [
+        "./packages/plugin-host/src/index.ts"
+      ],
       "@neuroclaw/runtime-worker": [
         "./apps/runtime-worker/src/index.ts"
       ],

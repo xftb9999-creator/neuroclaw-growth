@@ -34,6 +34,12 @@ export default defineConfig({
       "@neuroclaw/agent-workforce-contract": fileURLToPath(
         new URL("./packages/agent-workforce-contract/src/index.ts", import.meta.url)
       ),
+      "@neuroclaw/plugin-contract": fileURLToPath(
+        new URL("./packages/plugin-contract/src/index.ts", import.meta.url)
+      ),
+      "@neuroclaw/plugin-host": fileURLToPath(
+        new URL("./packages/plugin-host/src/index.ts", import.meta.url)
+      ),
       "@neuroclaw/runtime-worker": fileURLToPath(
         new URL("./apps/runtime-worker/src/index.ts", import.meta.url)
       ),

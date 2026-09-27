@@ -28,6 +28,9 @@
       "path": "../../packages/agent-core/tsconfig.json"
     },
     {
+      "path": "../../packages/plugin-host/tsconfig.json"
+    },
+    {
       "path": "../temporal-worker/tsconfig.json"
     }
   ]
