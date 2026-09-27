@@ -733,8 +733,14 @@ export const adapterManifests = adapterRegistry;
 /**
  * These tables deliberately keep scope, identity, versions, and references
  * queryable while retaining the complete validated contract as raw JSON.
- * They are local simulation foundations; external adapters and RLS runtime
- * enforcement remain outside this slice.
+ *
+ * Boundary statement (updated at P-2 for first-party pluginization): runtime
+ * plugin loading is in scope for first-party/internal plugins only, under
+ * host-enforced fail-closed gates (packages/plugin-host; default-disabled).
+ * No sandbox is promised — plugins run in-process with host privileges.
+ * Third-party code and platform distribution remain outside this slice; RLS
+ * runtime enforcement also remains outside. Registry immutability stands:
+ * no update/delete; upgrades register a new version and switch references.
  */
 export const evidenceRecords = pgTable(
   "evidence_records",
