@@ -191,10 +191,12 @@ export interface MonthlyArchiveAggregate {
  * 默认 +08（Asia/Shanghai，480 分钟；GM 2026-09-27 裁决 A4），可显式覆盖（0 = UTC）。
  * 例：period=2026-08 / offset=480 → [2026-07-31T16:00:00Z, 2026-08-31T16:00:00Z)。
  *
- * 注：物理列 created_at 实为 TIMESTAMPTZ（migrations.ts BASELINE），而 schema.ts
- * 声明 text()——`like` 前缀过滤在 PG 上无 `timestamptz ~~ text` 算子（42883）。
- * 比较算子（>=/<）以 ISO 字符串传参可被 PG 解析为 timestamptz，既有先例见
- * index.ts `processDueSchedules` 的 `lte(schedules.nextRunAt, now)`。
+ * 注：物理列 created_at 为 TIMESTAMPTZ（migrations.ts BASELINE；schema.ts 自
+ * I-043 方案 A 起同样声明 timestamp({ withTimezone: true, mode: "string" })）。
+ * 历史踩点：`like` 前缀过滤在 PG 上无 `timestamptz ~~ text` 算子（42883），
+ * 故此处采用边界比较。比较算子（>=/<）以 ISO 字符串传参可被 PG 解析为
+ * timestamptz，既有先例见 index.ts `processDueSchedules` 的
+ * `lte(schedules.nextRunAt, now)`。
  */
 function periodBounds(
   period: string,

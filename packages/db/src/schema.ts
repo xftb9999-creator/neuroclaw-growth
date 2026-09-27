@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   pgTable,
   text,
+  timestamp,
   integer,
   bigint,
   boolean,
@@ -13,18 +14,20 @@ import {
 
 // R2-A1/O (ADR-56 + Appendix B): dialect = Postgres.
 //
-// Temporal mapping decision: physical columns are TIMESTAMPTZ (migration
-// 0001) while the drizzle columns below stay `text()` — the application
-// contract is ISO-8601 UTC strings, and the node-postgres type parser in
-// db/index.ts normalizes every read to ISO. This isolates the app from
-// driver Date objects without adopting PG's space-separated string format.
+// Temporal mapping decision (I-043 方案 A): physical columns are TIMESTAMPTZ
+// (migration 0001) and every temporal drizzle column below declares
+// `timestamp({ withTimezone: true, mode: "string" })` so the schema matches
+// the database. `mode: "string"` keeps the application contract at ISO-8601
+// UTC strings (no driver Date objects); the node-postgres type parser in
+// db/index.ts normalizes every read to ISO. Parity with the physical columns
+// is pinned by schema-introspection.test.ts (information_schema vs this file).
 // Vector column on knowledge_entries powers semantic recall (R2-A3).
 
 export const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   plan: text("plan").notNull(),
-  createdAt: text("created_at").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
   // R2-D (Round Y): optional user-declared industry for benchmark aggregation.
   industry: text("industry")
 });
@@ -40,7 +43,7 @@ export const workspaceMembers = pgTable(
     workspaceId: text("workspace_id").notNull(),
     userId: text("user_id").notNull(),
     role: text("role").notNull(), // 'admin' | 'operator' | 'viewer'
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [index("idx_members_ws_user").on(table.workspaceId, table.userId)]
 );
@@ -57,10 +60,10 @@ export const runs = pgTable(
     failureReason: text("failure_reason"),
     currentStep: text("current_step"),
     approvalStatus: text("approval_status").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-    startedAt: text("started_at"),
-    completedAt: text("completed_at"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+    completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }),
     stepResults: text("step_results"),
     tokensUsed: integer("tokens_used"),
     costUsd: real("cost_usd"),
@@ -107,8 +110,8 @@ export const workItems = pgTable(
     workItemJson: text("work_item_json").notNull(),
     runJson: text("run_json").notNull(),
     receiptJson: text("receipt_json"),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [
     uniqueIndex("idx_work_items_legacy_run").on(table.legacyRunId),
@@ -134,8 +137,8 @@ export const attempts = pgTable(
     ...universalPersistenceScopeColumns(),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     runId: text("run_id").notNull(),
     workItemId: text("work_item_id").notNull(),
@@ -144,8 +147,8 @@ export const attempts = pgTable(
     workflowVersion: text("workflow_version").notNull(),
     workflowRef: text("workflow_ref"),
     status: text("status").notNull(),
-    startedAt: text("started_at").notNull(),
-    endedAt: text("ended_at"),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true, mode: "string" }),
     checkpointRef: text("checkpoint_ref"),
     rawJson: text("raw_json").notNull()
   },
@@ -163,8 +166,8 @@ export const replayCheckpoints = pgTable(
     ...universalPersistenceScopeColumns(),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     runId: text("run_id").notNull(),
     workItemId: text("work_item_id").notNull(),
@@ -190,8 +193,8 @@ export const universalAuditEvents = pgTable(
     ...universalPersistenceScopeColumns(),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     runId: text("run_id").notNull(),
     attemptId: text("attempt_id").notNull(),
@@ -201,7 +204,7 @@ export const universalAuditEvents = pgTable(
     actorRef: text("actor_ref").notNull(),
     subjectRef: text("subject_ref").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
-    occurredAt: text("occurred_at").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
     payload: text("payload").notNull(),
     rawJson: text("raw_json").notNull()
   },
@@ -222,7 +225,7 @@ export const auditEvents = pgTable("audit_events", {
   resourceType: text("resource_type").notNull(),
   resourceId: text("resource_id"),
   metadata: text("metadata"),
-  createdAt: text("created_at").notNull()
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 });
 
 export const approvalRequests = pgTable(
@@ -233,8 +236,8 @@ export const approvalRequests = pgTable(
     actionType: text("action_type").notNull(),
     reason: text("reason").notNull(),
     status: text("status").notNull(),
-    requestedAt: text("requested_at").notNull(),
-    resolvedAt: text("resolved_at"),
+    requestedAt: timestamp("requested_at", { withTimezone: true, mode: "string" }).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true, mode: "string" }),
     resolution: text("resolution")
   },
   (table) => [index("idx_approvals_run").on(table.runId)]
@@ -251,8 +254,8 @@ export const memoryRecords = pgTable(
     sourceRunId: text("source_run_id").notNull(),
     isPinned: boolean("is_pinned").notNull(),
     isSuppressed: boolean("is_suppressed").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     // P1 Crew (Round U): 'private' | 'team' — team-visible memories are
     // readable by every member of the owning workspace.
     visibility: text("visibility").notNull().default("private")
@@ -278,12 +281,12 @@ export const jobs = pgTable(
     idempotencyKey: text("idempotency_key"),
     maxAttempts: integer("max_attempts").notNull().default(3),
     attemptCount: integer("attempt_count").notNull().default(0),
-    nextAttemptAt: text("next_attempt_at"),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true, mode: "string" }),
     lastError: text("last_error"),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-    claimedAt: text("claimed_at"),
-    completedAt: text("completed_at")
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true, mode: "string" }),
+    completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
   },
   (table) => [
     index("idx_jobs_status_next").on(table.status, table.nextAttemptAt),
@@ -297,8 +300,8 @@ export const jobAttempts = pgTable("job_attempts", {
   attemptNumber: integer("attempt_number").notNull(),
   status: text("status").notNull(), // 'started' | 'completed' | 'failed'
   error: text("error"),
-  startedAt: text("started_at").notNull(),
-  completedAt: text("completed_at")
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
 });
 
 // I-042 D1: durable mirror of the DurableJobQueue lifecycle checkpoints.
@@ -313,7 +316,7 @@ export const runLifecycleCheckpoints = pgTable(
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
     stage: text("stage").notNull(), // 'queued' | 'runtime' | 'waiting_approval' | 'completed' | 'failed'
-    createdAt: text("created_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
     seq: bigint("seq", { mode: "number" })
       .notNull()
       .default(sql`nextval('run_lifecycle_checkpoints_seq_seq')`)
@@ -339,7 +342,7 @@ export const agents = pgTable("agents", {
   outputStyle: text("output_style").notNull().default("structured"),
   toolNames: text("tool_names"), // JSON string[]
   status: text("status").notNull().default("active"), // 'active' | 'inactive'
-  createdAt: text("created_at").notNull()
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 });
 
 // ---------------------------------------------------------------------------
@@ -357,7 +360,7 @@ export const artifacts = pgTable(
     title: text("title").notNull(),
     summary: text("summary"),
     contentJson: text("content_json").notNull(), // full output payload
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [index("idx_artifacts_ws").on(table.workspaceId)]
 );
@@ -376,7 +379,7 @@ export const knowledgeEntries = pgTable(
     tags: text("tags"), // JSON string[]
     source: text("source").notNull().default("manual"), // 'manual' | 'run' | 'ai'
     runId: text("run_id"),
-    createdAt: text("created_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
     // R2-A3: pgvector embedding (1536 dims, text-embedding-3-small). Written
     // asynchronously by the embed_knowledge durable job; nullable until then.
     embedding: vector("embedding", { dimensions: 1536 })
@@ -393,7 +396,7 @@ export const playbooks = pgTable("playbooks", {
   name: text("name").notNull(),
   stepsJson: text("steps_json").notNull(), // JSON [{templateType, roleKey, feedFrom}]
   builtin: boolean("builtin").notNull().default(false),
-  updatedAt: text("updated_at").notNull()
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
 });
 
 // ---------------------------------------------------------------------------
@@ -409,11 +412,11 @@ export const schedules = pgTable(
     label: text("label").notNull(),
     inputJson: text("input_json").notNull(), // run input payload
     intervalMinutes: integer("interval_minutes").notNull().default(1440),
-    nextRunAt: text("next_run_at").notNull(),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true, mode: "string" }).notNull(),
     lastRunId: text("last_run_id"),
     lastStatus: text("last_status"), // 'ok' | 'failed'
     status: text("status").notNull().default("active"), // 'active' | 'paused'
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [index("idx_schedules_due").on(table.status, table.nextRunAt)]
 );
@@ -430,9 +433,9 @@ export const subscriptions = pgTable(
     plan: text("plan").notNull(), // starter | growth(legacy alias) | team | business | enterprise
     status: text("status").notNull(), // trialing | active | past_due | cancelled
     monthlyRunQuota: integer("monthly_run_quota").notNull(), // 0 = unlimited
-    startedAt: text("started_at").notNull(),
-    renewsAt: text("renews_at"),
-    cancelledAt: text("cancelled_at")
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+    renewsAt: timestamp("renews_at", { withTimezone: true, mode: "string" }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true, mode: "string" })
   },
   (table) => [index("idx_subs_ws").on(table.workspaceId)]
 );
@@ -462,7 +465,7 @@ export const productEvents = pgTable(
     userId: text("user_id"),
     eventType: text("event_type").notNull(),
     payload: text("payload"), // JSON
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [
     index("idx_events_type_time").on(table.eventType, table.createdAt),
@@ -488,8 +491,8 @@ export const outboxEvents = pgTable(
     idempotencyKey: text("idempotency_key").notNull(),
     schemaVersion: text("schema_version").notNull(),
     eventType: text("event_type").notNull(),
-    occurredAt: text("occurred_at").notNull(),
-    emittedAt: text("emitted_at").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+    emittedAt: timestamp("emitted_at", { withTimezone: true, mode: "string" }).notNull(),
     scope: text("scope").notNull(),
     actorRef: text("actor_ref").notNull(),
     subjectRef: text("subject_ref").notNull(),
@@ -499,8 +502,8 @@ export const outboxEvents = pgTable(
     dataClass: text("data_class").notNull(),
     payload: text("payload").notNull(),
     status: text("status").notNull().default("PENDING"),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [
     uniqueIndex("idx_outbox_idempotency").on(table.idempotencyScope, table.idempotencyKey),
@@ -536,9 +539,9 @@ export const outboxDeliveryAttempts = pgTable(
     status: text("status").notNull(),
     httpStatus: integer("http_status"),
     error: text("error"),
-    startedAt: text("started_at").notNull(),
-    endedAt: text("ended_at"),
-    nextAttemptAt: text("next_attempt_at")
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true, mode: "string" }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true, mode: "string" })
   },
   (table) => [
     uniqueIndex("idx_outbox_delivery_attempts_key_attempt").on(
@@ -580,11 +583,11 @@ export const runEvents = pgTable(
     correlationId: text("correlation_id").notNull(),
     traceId: text("trace_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
-    occurredAt: text("occurred_at").notNull(),
-    emittedAt: text("emitted_at").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+    emittedAt: timestamp("emitted_at", { withTimezone: true, mode: "string" }).notNull(),
     dataClass: text("data_class").notNull(),
     payload: text("payload").notNull(),
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [
     uniqueIndex("idx_run_events_run_sequence").on(table.runId, table.sequence),
@@ -619,8 +622,8 @@ export const workflowDefinitions = pgTable(
     projectId: text("project_id"),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     inputSchema: text("input_schema").notNull(),
     outputSchema: text("output_schema").notNull(),
@@ -674,8 +677,8 @@ export const projectPackRegistry = pgTable(
     status: text("status").notNull(),
     manifestSnapshot: text("manifest_snapshot").notNull(),
     ...registrySnapshotColumns(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [
     uniqueIndex("idx_project_pack_registry_identity_version").on(table.packId, table.version),
@@ -704,8 +707,8 @@ export const adapterRegistry = pgTable(
     status: text("status").notNull(),
     manifestSnapshot: text("manifest_snapshot").notNull(),
     ...registrySnapshotColumns(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [
     uniqueIndex("idx_adapter_registry_identity_version").on(table.adapterId, table.version),
@@ -739,15 +742,15 @@ export const evidenceRecords = pgTable(
     projectId: text("project_id"),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     subjectRef: text("subject_ref").notNull(),
     evidenceLevel: text("evidence_level").notNull(),
     sourceType: text("source_type").notNull(),
     sourceRef: text("source_ref").notNull(),
-    observedAt: text("observed_at").notNull(),
-    collectedAt: text("collected_at").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(),
+    collectedAt: timestamp("collected_at", { withTimezone: true, mode: "string" }).notNull(),
     contentHash: text("content_hash"),
     excerptRef: text("excerpt_ref"),
     verifierRef: text("verifier_ref"),
@@ -771,8 +774,8 @@ export const receipts = pgTable(
     projectId: text("project_id"),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     workItemId: text("work_item_id").notNull(),
     runId: text("run_id").notNull(),
@@ -799,7 +802,7 @@ export const receipts = pgTable(
     costSnapshot: text("cost_snapshot"),
     resultStatus: text("result_status").notNull(),
     replayRef: text("replay_ref"),
-    producedAt: text("produced_at").notNull(),
+    producedAt: timestamp("produced_at", { withTimezone: true, mode: "string" }).notNull(),
     validationJson: text("validation_json").notNull().default("[]"),
     rawJson: text("raw_json").notNull()
   },
@@ -819,8 +822,8 @@ export const metricDefinitions = pgTable(
     projectId: text("project_id"),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     metricKey: text("metric_key").notNull(),
     name: text("name").notNull(),
@@ -855,8 +858,8 @@ export const metricObservations = pgTable(
     projectId: text("project_id").notNull(),
     schemaVersion: text("schema_version").notNull(),
     createdBy: text("created_by").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
     sourceRefs: text("source_refs").notNull(),
     definitionRef: text("definition_ref").notNull(),
     metricKey: text("metric_key").notNull(),
@@ -866,13 +869,13 @@ export const metricObservations = pgTable(
     unit: text("unit").notNull(),
     numerator: real("numerator"),
     denominator: real("denominator"),
-    periodStart: text("period_start").notNull(),
-    periodEnd: text("period_end").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true, mode: "string" }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true, mode: "string" }).notNull(),
     definitionVersion: text("definition_version").notNull(),
     sourceEventRefs: text("source_event_refs").notNull(),
     evidenceRefs: text("evidence_refs").notNull(),
     cohort: text("cohort"),
-    observedAt: text("observed_at").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(),
     confidence: text("confidence").notNull(),
     status: text("status").notNull(),
     rawJson: text("raw_json").notNull()
@@ -904,8 +907,8 @@ export const teams = pgTable(
     name: text("name").notNull(),
     goal: text("goal").notNull().default(""),
     status: text("status").notNull().default("active"), // active | paused | archived
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [index("idx_teams_ws").on(table.workspaceId)]
 );
@@ -918,7 +921,7 @@ export const teamMembers = pgTable(
     workspaceId: text("workspace_id").notNull(), // denormalized for RLS
     agentId: text("agent_id").notNull(),
     position: text("position").notNull(), // content | conversion | review | operator
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [index("idx_team_members_team").on(table.teamId)]
 );
@@ -940,7 +943,7 @@ export const industryBenchmarks = pgTable(
     p90DurationSec: real("p90_duration_sec"),
     sampleSize: integer("sample_size").notNull().default(0),
     period: text("period").notNull().default("all"),
-    createdAt: text("created_at").notNull()
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
   },
   (table) => [index("idx_benchmarks_industry").on(table.industry, table.templateType)]
 );
@@ -955,8 +958,8 @@ export const teamRuns = pgTable("team_runs", {
   currentStep: integer("current_step").notNull().default(0),
   stepsJson: text("steps_json").notNull(), // JSON [{templateType, roleKey, feedFrom}]
   runIdsJson: text("run_ids_json").notNull().default("[]"), // JSON string[], index = step order
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
   // P1 Crew (Round V): linking a relay instance to its persistent Team.
   teamId: text("team_id")
 });
