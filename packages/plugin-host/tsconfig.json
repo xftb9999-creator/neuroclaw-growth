@@ -11,6 +11,9 @@
   "references": [
     {
       "path": "../plugin-contract/tsconfig.json"
+    },
+    {
+      "path": "../shared/tsconfig.json"
     }
   ]
 }

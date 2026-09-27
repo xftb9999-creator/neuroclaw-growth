@@ -5,8 +5,8 @@
  * `.artifacts/impl/2026-09-27-p1-2-3.md` §4.1 的下传义务）：
  *
  *   扫描目录 → 集合校验（verifyPluginManifestSet）→ 注册（enabled=false 状态机）
- *   → 显式激活（allowlist）→ 单件门（assertHostApiCompatible）→ 动态 import(entryPoint)
- *   → onLoad → enabled=true → onEnable
+ *   → 显式激活（allowlist）→ 单件门（assertHostApiCompatible）→ 能力授予门（P2-2）
+ *   → 动态 import(entryPoint) → 能力句柄发放（P2-2）→ onLoad → enabled=true → onEnable
  *
  * 安全语义：
  * - **fail-closed**：未通过校验的清单不进入 registry、永不触达 import（门禁 1 前移）；
@@ -14,11 +14,14 @@
  *   会被激活；G1「首次 enabled=true 运行期装载」属独立授权阈值（p2-readiness §4），
  *   默认值为空 = 生产默认零代码执行；
  * - **重入校验**：激活前再次运行单件门（防注册后清单漂移与未来 API 注册路径绕过）；
+ * - **宿主强制（P2-2）**：激活前增跑能力授予门（声明 ∩ 宿主强制，空交集拒绝装载）；
+ *   插件仅经 ctx.capabilities 句柄访问能力，写路径在调用边界过 CONTROLLED_WRITE
+ *   授权链（详见 ./capability-handle.ts 头注）；
  * - 装载初始化本身**不设开关**：只要宿主启动（createApp 在默认启动路径上），
  *   扫描/校验/注册即执行——避免「死开关」。
  *
- * 范围边界：P2-1 只做「装载 + enabled 状态机 + registry.list()」。能力句柄与调用
- * 边界强制属 P2-2；插件级审计属 P2-3；五类恶意用例套件属 P2-4；同进程无真沙箱
+ * 范围边界：P2-1 只做「装载 + enabled 状态机 + registry.list()」；P2-2 增补能力
+ * 句柄与调用边界强制。插件级审计属 P2-3；五类恶意用例套件属 P2-4；同进程无真沙箱
  * （残余风险，范围锁第一方，见 plugin-roadmap §5.1）。
  */
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -33,6 +36,16 @@ import {
   type CompatibilityFinding,
   type PluginManifest
 } from "@neuroclaw/plugin-contract";
+
+import {
+  PluginCapabilityError,
+  assertPluginCapabilitiesGrantable,
+  createPluginCapabilityHandle,
+  type ControlledWriteAuthorizationResolver,
+  type ControlledWriteGate,
+  type PluginCapabilityHandle,
+  type PluginCapabilityPolicy
+} from "./capability-handle.js";
 
 /** 扫描目标文件名后缀：与 P-0 规划的 `*.integration.json` 目录共存而互不误读。 */
 export const PLUGIN_MANIFEST_FILE_SUFFIX = ".plugin.json";
@@ -110,11 +123,16 @@ export type PluginManifestVerifier = (
   hostApiVersion: string
 ) => PluginManifest;
 
-/** 生命周期钩子上下文（P2-1 最小 ABI；P3 冻结扩展）。 */
+/** 生命周期钩子上下文（P2-1 最小 ABI；P2-2 增补 capabilities；P3 冻结扩展）。 */
 export interface PluginHookContext {
   manifest: PluginManifest;
   hostApiVersion: string;
   logger: (message: string) => void;
+  /**
+   * P2-2 能力句柄：插件访问 db/network/fs 的唯一授权面（裸访问不发放）。
+   * 写路径在调用边界过 CONTROLLED_WRITE 授权链；句柄随 disable() 撤销。
+   */
+  capabilities: PluginCapabilityHandle;
 }
 
 export interface PluginHostOptions {
@@ -127,6 +145,12 @@ export interface PluginHostOptions {
    * G1 定点确认前必须保持为空）。
    */
   enabledPluginKeys?: readonly string[];
+  /** 宿主能力策略（P2-2；缺省＝最严：要求 simulation-only 且零读/写授予）。 */
+  capabilityPolicy?: PluginCapabilityPolicy;
+  /** 宿主侧 CONTROLLED_WRITE 证据解析器（缺省＝写全拒；P4-1 落真实执行体）。 */
+  authorizeControlledWrite?: ControlledWriteAuthorizationResolver;
+  /** 授权链求值接缝（测试注入用；生产默认 shared `assertControlledWriteAuthorized`）。 */
+  assertControlledWrite?: ControlledWriteGate;
   importer?: PluginImporter;
   verifyManifest?: PluginManifestVerifier;
   logger?: (event: PluginHostLogEvent) => void;
@@ -193,6 +217,9 @@ export class PluginHost {
   readonly pluginsDir: string;
 
   private readonly enabledPluginKeys: ReadonlySet<string>;
+  private readonly capabilityPolicy: PluginCapabilityPolicy | undefined;
+  private readonly authorizeControlledWrite: ControlledWriteAuthorizationResolver | undefined;
+  private readonly assertControlledWrite: ControlledWriteGate | undefined;
   private readonly importer: PluginImporter;
   private readonly verifyManifest: PluginManifestVerifier;
   private readonly logger: (event: PluginHostLogEvent) => void;
@@ -200,6 +227,8 @@ export class PluginHost {
 
   private readonly entries = new Map<string, PluginHostEntry>();
   private readonly modules = new Map<string, unknown>();
+  /** P2-2：当前激活的插件能力句柄（disable 时撤销并移除）。 */
+  private readonly capabilityHandles = new Map<string, PluginCapabilityHandle>();
   private initPromise: Promise<PluginHostInitReport> | null = null;
   private lastReport: PluginHostInitReport | null = null;
 
@@ -207,6 +236,9 @@ export class PluginHost {
     this.hostApiVersion = options.hostApiVersion;
     this.pluginsDir = options.pluginsDir;
     this.enabledPluginKeys = new Set(options.enabledPluginKeys ?? []);
+    this.capabilityPolicy = options.capabilityPolicy;
+    this.authorizeControlledWrite = options.authorizeControlledWrite;
+    this.assertControlledWrite = options.assertControlledWrite;
     this.importer = options.importer ?? ((specifier) => import(specifier));
     this.verifyManifest = options.verifyManifest ?? assertHostApiCompatible;
     this.logger = options.logger ?? defaultLogger;
@@ -274,7 +306,26 @@ export class PluginHost {
       throw error;
     }
 
-    // 2) 动态 import（仅在门通过之后；模块缓存命中时跳过重复求值）。
+    // 2) 能力授予门（P2-2）：清单声明 ∩ 宿主强制 —— 交集为空（如宿主要求
+    //    simulation-only 而清单声明 live）⇒ 拒绝装载；仍在动态 import 之前
+    //    （fail-closed；plugin-roadmap.md:402）。
+    try {
+      assertPluginCapabilitiesGrantable(manifest, this.capabilityPolicy);
+    } catch (error) {
+      entry.state = "rejected";
+      entry.enabled = false;
+      entry.error =
+        error instanceof PluginCapabilityError ? `${error.code}: ${error.message}` : errorMessage(error);
+      this.logger({
+        level: "warn",
+        event: "rejected",
+        pluginKey,
+        message: `activation refused before import (capability gate): ${entry.error}`
+      });
+      throw error;
+    }
+
+    // 3) 动态 import（仅在门通过之后；模块缓存命中时跳过重复求值）。
     const alreadyLoaded = entry.loadedAt !== null;
     if (!this.modules.has(pluginKey)) {
       const specifier = resolveModuleSpecifier(manifest.entryPoint, entry.manifestPath, this.pluginsDir);
@@ -292,18 +343,28 @@ export class PluginHost {
     }
     const module = this.modules.get(pluginKey);
 
-    // 3) onLoad（仅首次装载）→ enabled → onEnable。
+    // 4) 能力句柄发放（P2-2）→ onLoad（仅首次装载）→ enabled → onEnable。
+    //    句柄每次激活重建；激活失败即撤销（不留残留授权面）。
+    const capabilities = createPluginCapabilityHandle({
+      manifest,
+      policy: this.capabilityPolicy,
+      authorizeControlledWrite: this.authorizeControlledWrite,
+      assertControlledWrite: this.assertControlledWrite
+    });
+    this.capabilityHandles.set(pluginKey, capabilities);
     try {
       if (!alreadyLoaded) {
         entry.state = "loaded";
         entry.loadedAt = this.now().toISOString();
-        await this.callHook(module, "onLoad", manifest);
+        await this.callHook(module, "onLoad", manifest, capabilities);
       }
-      await this.callHook(module, "onEnable", manifest);
+      await this.callHook(module, "onEnable", manifest, capabilities);
     } catch (error) {
       entry.state = "failed";
       entry.enabled = false;
       entry.error = errorMessage(error);
+      capabilities.revoke();
+      this.capabilityHandles.delete(pluginKey);
       throw new PluginHostError(
         "PLUGIN_ACTIVATION_FAILED",
         `lifecycle hook failed for ${manifestTuple(manifest)}: ${entry.error}`
@@ -330,9 +391,10 @@ export class PluginHost {
       );
     }
     const module = this.modules.get(pluginKey);
-    if (module && entry.manifest) {
+    const capabilities = this.capabilityHandles.get(pluginKey);
+    if (module && entry.manifest && capabilities) {
       try {
-        await this.callHook(module, "onDisable", entry.manifest);
+        await this.callHook(module, "onDisable", entry.manifest, capabilities);
       } catch (error) {
         this.logger({
           level: "warn",
@@ -342,6 +404,9 @@ export class PluginHost {
         });
       }
     }
+    // 撤销能力句柄（P2-2）：onDisable 之后任何调用均在调用边界被拒。
+    capabilities?.revoke();
+    this.capabilityHandles.delete(pluginKey);
     entry.enabled = false;
     entry.state = "disabled";
     this.logger({ level: "info", event: "disabled", pluginKey, message: "disabled" });
@@ -510,7 +575,8 @@ export class PluginHost {
   private async callHook(
     module: unknown,
     hook: "onLoad" | "onEnable" | "onDisable",
-    manifest: PluginManifest
+    manifest: PluginManifest,
+    capabilities: PluginCapabilityHandle
   ): Promise<void> {
     if (module === null || module === undefined) return;
     const namespace = module as Record<string, unknown>;
@@ -525,7 +591,8 @@ export class PluginHost {
       manifest,
       hostApiVersion: this.hostApiVersion,
       logger: (message: string) =>
-        this.logger({ level: "info", event: "init", pluginKey: manifest.pluginKey, message })
+        this.logger({ level: "info", event: "init", pluginKey: manifest.pluginKey, message }),
+      capabilities
     };
     await (candidate as (ctx: PluginHookContext) => unknown).call(surface, context);
   }

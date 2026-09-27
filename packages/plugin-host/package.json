@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@neuroclaw/plugin-contract": "*"
+    "@neuroclaw/plugin-contract": "*",
+    "@neuroclaw/shared": "*"
   }
 }
