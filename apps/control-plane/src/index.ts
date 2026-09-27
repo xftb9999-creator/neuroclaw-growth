@@ -151,6 +151,11 @@ import { TemporalWorkerSkeleton, type JobPayload } from "@neuroclaw/temporal-wor
 import { generateStructuredForAgent, embedText, isEmbeddingEnabled } from "@neuroclaw/agent-core";
 import { playbooks as playbooksTable } from "@neuroclaw/db";
 import { resolveOutboxDispatchConfig } from "./outbox-dispatcher.js";
+import {
+  buildMonthlyArchive,
+  DEFAULT_TZ_OFFSET_MINUTES,
+  type MonthlyArchiveAggregate
+} from "./monthly-archive.js";
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -4470,6 +4475,22 @@ export class ControlPlaneService {
           : undefined
       };
     });
+  }
+
+  /**
+   * I-017 L0 读路径（Q1=C 内部运营先行；Q2=增长链降级口径；Q3=workspace 边界）。
+   * 按 workspace + period（YYYY-MM）聚合月度档案中间模型；只读，无写入。
+   * 业务月界默认 +08（Asia/Shanghai，480 分钟；GM 2026-09-27 裁决 A4），
+   * `tzOffsetMinutes` 可显式覆盖（分钟，东为正；如 0 = UTC）。
+   * 产品化导出格式（A/B）与路由（L3）不在本层；universal 写接线（L2）不做。
+   */
+  async aggregateMonthlyArchive(
+    workspaceId: string,
+    period: string,
+    tzOffsetMinutes: number = DEFAULT_TZ_OFFSET_MINUTES
+  ): Promise<MonthlyArchiveAggregate> {
+    await this.assertWorkspaceExists(workspaceId);
+    return buildMonthlyArchive(this.db, workspaceId, period, tzOffsetMinutes);
   }
 
   async cloneRun(runId: string): Promise<{
