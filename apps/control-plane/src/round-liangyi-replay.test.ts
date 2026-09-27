@@ -2,10 +2,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 
-import { closeDatabase, createInMemoryDb, runEvents, type Database } from "@neuroclaw/db";
+import { closeDatabase, createInMemoryDb, outboxEvents, runEvents, type Database } from "@neuroclaw/db";
 import {
+  OUTBOX_DELIVERY_IDEMPOTENCY_SCOPE,
+  buildOutboxDeliveryIntent,
   exportRunEventReplay,
   incidentReplayFixtureSchema,
+  outboxDeliveryIntentSchema,
   verifyIncidentReplay,
   type IncidentReplayFixture
 } from "@neuroclaw/shared";
@@ -24,8 +27,10 @@ import { ControlPlaneService } from "./index.js";
  *     against the durable `runs` row.
  *
  * Event payloads for delivery (`transport / recipientHash / contentDigest /
- * deliveryOutcome`) belong to W2's outbox and are absent from W1 logs, so
- * every fixture here expects an empty side-effect set.
+ * deliveryOutcome`) belong to W2's outbox. The W1-only incidents expect an
+ * empty side-effect set; `incident-webhook-intent.json` is the W2-era fixture
+ * whose `growth.outbox.delivery_intent_recorded` event evidences one recorded
+ * delivery intent, whose key is replayed through the real W2 builder/enqueue.
  */
 
 const openDatabases: Database[] = [];
@@ -76,6 +81,17 @@ describe("梁一: committed incident fixtures replay green", () => {
     expect(
       fixtures.some(({ fixture }) => fixture.expected.run.status === "failed"),
       "at least one committed fixture must be a failed run"
+    ).toBe(true);
+
+    // W2 era: at least one committed fixture evidences a recorded delivery
+    // intent (non-empty side effects), while the W1-only ones stay empty.
+    expect(
+      fixtures.some(({ fixture }) => fixture.expected.sideEffects.length > 0),
+      "at least one committed fixture must evidence a W2 side effect"
+    ).toBe(true);
+    expect(
+      fixtures.some(({ fixture }) => fixture.expected.sideEffects.length === 0),
+      "W1-only fixtures must still expect no side effect"
     ).toBe(true);
   });
 
@@ -184,5 +200,103 @@ describe("梁一: exporter over a real W1 log", () => {
     expect(fixture.expected.sideEffects).toEqual([]);
     expect(verifyIncidentReplay(fixture)).toEqual({ ok: true, mismatches: [] });
     expect(fixture.expected.run).toEqual(await service.getRun(run.id));
+  });
+});
+
+const W2_FIXTURE_FILE = "incident-webhook-intent.json";
+const OUTBOX_SWITCH_ENV = "NEUROCLAW_OUTBOX_DISPATCH_ENABLED";
+
+function w2Fixture(): IncidentReplayFixture {
+  const found = committedFixtures().find((entry) => entry.file === W2_FIXTURE_FILE);
+  expect(found, `${W2_FIXTURE_FILE} must be committed`).toBeDefined();
+  return found!.fixture;
+}
+
+function intentRecordEvent(fixture: IncidentReplayFixture) {
+  const event = fixture.events.find(
+    (candidate) => candidate.eventType === "growth.outbox.delivery_intent_recorded"
+  );
+  expect(event, "fixture must carry the outbox delivery-intent record event").toBeDefined();
+  return event!;
+}
+
+function intentPayload(fixture: IncidentReplayFixture): Record<string, unknown> {
+  return intentRecordEvent(fixture).payload as Record<string, unknown>;
+}
+
+describe("梁一: W2 delivery-intent fixture (sideEffects non-empty)", () => {
+  it("replays the committed intent fixture green, evidencing exactly one side effect", () => {
+    const fixture = w2Fixture();
+    const event = intentRecordEvent(fixture);
+
+    expect(fixture.expected.steps).toEqual(["preview-send"]);
+    expect(fixture.expected.sideEffects).toEqual([
+      {
+        eventId: event.eventId,
+        stepId: "preview-send",
+        transport: "webhook",
+        recipientHash: "c8cd3c64",
+        contentDigest: "c61aacb8312fae95",
+        deliveryOutcome: "PENDING"
+      }
+    ]);
+    expect(fixture.expected.run.status).toBe("completed");
+    expect(verifyIncidentReplay(fixture)).toEqual({ ok: true, mismatches: [] });
+  });
+
+  it("replays the recorded intent through the W2 builder: key agrees with the side effect", () => {
+    const fixture = w2Fixture();
+    const payload = intentPayload(fixture);
+    const intent = outboxDeliveryIntentSchema.parse(payload.deliveryIntent);
+    const sideEffect = payload.sideEffect as {
+      transport: string;
+      recipientHash: string;
+      contentDigest: string;
+    };
+
+    // 意图记录可重放: the builder regenerates the recorded key byte-for-byte.
+    expect(
+      buildOutboxDeliveryIntent({ transport: intent.transport, body: intent.body }).idempotencyKey
+    ).toBe(intent.idempotencyKey);
+
+    // 键一致: the `rcpt` / `body` segments are the same digests the side effect
+    // carries, so the replay reader and the delivery key share one source.
+    const keyMatch = /^run:[^:]+:action:[^:]+:rcpt:([0-9a-f]{8}):body:([0-9a-f]{16})$/.exec(
+      intent.idempotencyKey
+    );
+    expect(keyMatch).not.toBeNull();
+    expect(sideEffect.transport).toBe(intent.transport);
+    expect(sideEffect.recipientHash).toBe(keyMatch![1]);
+    expect(sideEffect.contentDigest).toBe(keyMatch![2]);
+  });
+
+  it("the real W2 transactional enqueue accepts and persists the recorded intent", async () => {
+    const fixture = w2Fixture();
+    const intent = outboxDeliveryIntentSchema.parse(intentPayload(fixture).deliveryIntent);
+
+    const previous = process.env[OUTBOX_SWITCH_ENV];
+    process.env[OUTBOX_SWITCH_ENV] = "1";
+    try {
+      const { db, service } = await setup();
+      // The replayed terminal row already carries the adapter-recorded intent,
+      // exactly the shape `collectRunDeliveryIntents` reads at enqueue time.
+      const run = fixture.expected.run;
+      expect(run.stepResults?.[0]?.payload?.deliveryIntent).toEqual(intent);
+
+      await service.persistRunProjection(run, "insert");
+
+      const rows = await db.select().from(outboxEvents);
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row.eventType).toBe("growth.outbox.delivery_intent_recorded");
+      expect(row.idempotencyScope).toBe(OUTBOX_DELIVERY_IDEMPOTENCY_SCOPE);
+      expect(row.idempotencyKey).toBe(intent.idempotencyKey);
+      expect(row.subjectRef).toBe(run.id);
+      expect(row.status).toBe("PENDING");
+      expect(JSON.parse(row.payload)).toEqual({ deliveryIntent: intent });
+    } finally {
+      if (previous === undefined) delete process.env[OUTBOX_SWITCH_ENV];
+      else process.env[OUTBOX_SWITCH_ENV] = previous;
+    }
   });
 });
