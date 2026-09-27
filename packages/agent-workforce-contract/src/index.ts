@@ -1110,3 +1110,16 @@ export function planSpecFingerprint(plan: PlanSpec): string {
   const { planFingerprint: _embedded, ...content } = planSpecSchema.parse(plan);
   return createHash("sha256").update(canonicalJson(content)).digest("hex");
 }
+
+// ---------------------------------------------------------------------------
+// AW-5 片 2 · 结构化交接（handoff）— relay 消费入口（barrel 最小公开面）。
+// `duty-decision` 导出裁决维持「暂不导出」（源码内直接引用），二者独立。
+// ---------------------------------------------------------------------------
+
+export {
+  validateHandoff,
+  type HandoffValidationOptions,
+  type HandoffValidationResult,
+  type HandoffViolation,
+  type HandoffViolationKind
+} from "./handoff.js";

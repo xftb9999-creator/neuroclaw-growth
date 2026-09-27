@@ -42,7 +42,10 @@ import {
 import {
   AGENT_ROLE_KEYS,
   agentRoleKeySchema,
-  type AgentRoleKey
+  validateHandoff,
+  type AgentInputContract,
+  type AgentRoleKey,
+  type HandoffValidationResult
 } from "@neuroclaw/agent-workforce-contract";
 import {
   DrizzleMemoryStore,
@@ -5523,10 +5526,41 @@ export class ControlPlaneService {
       }
     })();
 
-    const carried =
-      runIds.length > 0 && step.feedFrom.length > 0
-        ? await this.getCarriedPayload(runIds[runIds.length - 1], step.feedFrom)
-        : "";
+    // AW-5 片2（判据①③）：结构化交接。上一棒存在且本步声明 feedFrom 时，
+    // 先按契约构建并校验 handoffPayload；校验失败 ⇒ 本步零 run 创建，
+    // relay 置 failed 并抛错（拒绝路径，不再走字符串盲拼）。
+    let handoffPayload: Record<string, unknown> | null = null;
+    if (runIds.length > 0 && step.feedFrom.length > 0) {
+      const { result } = await this.buildTeamHandoff(step, stepIndex, runIds[runIds.length - 1]);
+      if (!result.ok) {
+        await this.db
+          .update(teamRuns)
+          .set({ status: "failed", updatedAt: new Date().toISOString() })
+          .where(eq(teamRuns.id, relayId));
+        this.traceLog.record({
+          scope: "control-plane",
+          action: "team_handoff_rejected",
+          metadata: {
+            relayId,
+            stepIndex: String(stepIndex),
+            fromTask: result.fromTask,
+            toTask: result.toTask,
+            violations: result.violations
+              .map((violation) => `${violation.kind}${violation.field ? `(${violation.field})` : ""}`)
+              .join(", ")
+          }
+        });
+        throw new Error(
+          `Team handoff rejected for ${relayId} step ${stepIndex}: ` +
+            result.violations
+              .map((violation) => `${violation.kind}${violation.field ? `(${violation.field})` : ""}`)
+              .join(", ")
+        );
+      }
+      if (result.acceptedFields.length > 0) {
+        handoffPayload = result.accepted;
+      }
+    }
 
     let run: Run;
     try {
@@ -5534,9 +5568,7 @@ export class ControlPlaneService {
         workspaceId: team.workspaceId,
         templateType: step.templateType as never,
         input: {
-          businessSummary: carried
-            ? `${team.goal}\n[Carried from previous step]\n${carried}`
-            : team.goal,
+          businessSummary: team.goal,
           targetCustomer: team.audience || "目标客群",
           preferredChannels: ["email"],
           ...(step.templateType === "content_acquisition"
@@ -5544,6 +5576,8 @@ export class ControlPlaneService {
             : step.templateType === "private_conversion"
               ? { offerAsset: "团队接力 offer" }
               : { metricsWindowDays: 7 }),
+          // AW-5 片2：结构化交接载荷（已按契约校验；替代字符串拼接路径）。
+          ...(handoffPayload ? { handoffPayload } : {}),
           // Thread the crew-team linkage so step runs carry teamId (Round V).
           ...((team as { teamId?: string | null }).teamId
             ? { _teamId: (team as { teamId: string }).teamId }
@@ -5573,6 +5607,71 @@ export class ControlPlaneService {
     }
 
     return run;
+  }
+
+  /**
+   * AW-5 片2（判据①③）：relay 侧结构化交接构建与校验。
+   * - 交接字段集＝`step.feedFrom`（下游对「接受哪些上游字段」的声明，兼容保留）；
+   * - 取值自上游 run 的 `outputPayload`，保持原始结构（string[] 不再 join("; ")）；
+   * - 字段声明解析：优先下游模板 inputContract，其次上游模板 outputContract；
+   *   两侧均无声明 ⇒ 不在校验契约内，由 validateHandoff 拒为未声明字段；
+   * - `expectedFields`＝feedFrom：任一期望字段缺失即拒（fail-closed）；
+   * - 结果 `ok=false` 时由 launchTeamStep 走拒绝路径（零下游 run 创建）。
+   */
+  private async buildTeamHandoff(
+    step: TeamStep,
+    stepIndex: number,
+    upstreamRunId: string
+  ): Promise<{ result: HandoffValidationResult; payload: Record<string, unknown> }> {
+    const upstreamRun = await this.getRun(upstreamRunId);
+    const upstreamPayload = (upstreamRun.outputPayload ?? {}) as Record<string, unknown>;
+    const upstreamTemplate = this.registry.get(upstreamRun.templateType);
+    const downstreamTemplate = this.registry.get(step.templateType);
+
+    const fields = [...new Set(step.feedFrom)];
+    const downstreamByName = new Map(
+      (downstreamTemplate?.inputContract.fields ?? []).map((declaration) => [
+        declaration.name,
+        declaration
+      ])
+    );
+    const upstreamByName = new Map(
+      (upstreamTemplate?.outputContract.fields ?? []).map((declaration) => [
+        declaration.name,
+        declaration
+      ])
+    );
+
+    const contract: AgentInputContract = {
+      fields: fields.flatMap((name) => {
+        const declaration = downstreamByName.get(name) ?? upstreamByName.get(name);
+        if (!declaration) return [];
+        return [
+          {
+            name,
+            type: declaration.type,
+            required: true,
+            description: `relay handoff ${upstreamRunId} -> ${step.templateType}`
+          }
+        ];
+      })
+    };
+
+    const payload: Record<string, unknown> = {};
+    for (const name of fields) {
+      const value = upstreamPayload[name];
+      if (value !== undefined && value !== null) payload[name] = value;
+    }
+
+    const result = validateHandoff(
+      payload,
+      upstreamRunId,
+      `step_${stepIndex}_${step.templateType}`,
+      contract,
+      { expectedFields: fields }
+    );
+
+    return { result, payload };
   }
 
   /** Completion hook: the active team whose latest run finished advances. */
