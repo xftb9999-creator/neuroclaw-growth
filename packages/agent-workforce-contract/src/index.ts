@@ -24,6 +24,8 @@
  *   接线方式待 GM 裁点③，本批不另建 `capability-match` 包。
  * - RG-3 本批切片：memoryScope / kpi / escalation 收紧（§3.6）+ `duty-decision.ts`
  *   上岗裁决纯函数（不进包 barrel，循 RG-2b 非 barrel 先例）；插件化（AW-6）属 P-2，不做。
+ * - M1 本批切片（2026-09-27）：8 岗位 profile 终稿 v1（`profiles.v1.json` + 指纹，§8）；
+ *   3 个 E3 岗位契约零新写直迁、5 个设计岗 E1 草案复核后定稿；无来源的键位缺省（见留证）。
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -43,6 +45,7 @@ import {
   type TemplateOutputPayload
 } from "@neuroclaw/shared";
 import capabilityInventoryV1Json from "./capability-inventory.v1.json" with { type: "json" };
+import agentProfilesV1Json from "./profiles.v1.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
 // §1 AgentRoleKey — 8 岗位键（唯一分派 / 裁决键）
@@ -499,4 +502,62 @@ export function resolveAgentCapabilityRefs(
     items,
     blocked
   };
+}
+
+// ---------------------------------------------------------------------------
+// §8 M1：8 岗位 profile 终稿 v1（profiles.v1.json）
+// ---------------------------------------------------------------------------
+
+/**
+ * 文件形态 `{version:"1.0", profiles: AgentProfile[]}`（`.strict()`）。
+ * 不变量：role 唯一且恰为 `AGENT_ROLE_KEYS` 全量（8/8，缺一/重复即拒）。
+ * 落盘口径：3 个 E3 岗位契约零新写直迁 templates；5 个设计岗 E1 草案经复核定稿；
+ * 其余键位仅落有来源者（无来源不发明，见 `.artifacts/impl/20260927-m1-profiles.md`）。
+ */
+export const agentProfilesSchema = z
+  .object({
+    version: z.literal("1.0"),
+    profiles: z.array(agentProfileSchema).min(1)
+  })
+  .strict()
+  .superRefine((document, ctx) => {
+    const seen = new Set<string>();
+    document.profiles.forEach((profile, index) => {
+      if (seen.has(profile.role)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["profiles", index, "role"],
+          message: `重复 role: ${profile.role}`
+        });
+      }
+      seen.add(profile.role);
+    });
+    for (const role of AGENT_ROLE_KEYS) {
+      if (!seen.has(role)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["profiles"],
+          message: `缺少 role 终稿: ${role}`
+        });
+      }
+    }
+  });
+export type AgentProfilesDocument = z.infer<typeof agentProfilesSchema>;
+
+/** 8 岗位 profile 终稿 v1（静态 JSON；来源见 .artifacts/impl/20260927-m1-profiles.md）。 */
+export const AGENT_PROFILES_V1: AgentProfilesDocument = agentProfilesSchema.parse(agentProfilesV1Json);
+
+/** 事实源文件（用于指纹与快照复核）。 */
+export const AGENT_PROFILES_V1_FILE = "profiles.v1.json";
+
+/**
+ * profiles 指纹：对 parse 后的文档做 canonical JSON + sha256（口径同清单指纹）。
+ * 同输入两次调用字节一致（默认参数即 AGENT_PROFILES_V1）。
+ */
+export function agentProfilesFingerprint(
+  document: AgentProfilesDocument = AGENT_PROFILES_V1
+): string {
+  return createHash("sha256")
+    .update(canonicalJson(agentProfilesSchema.parse(document)))
+    .digest("hex");
 }

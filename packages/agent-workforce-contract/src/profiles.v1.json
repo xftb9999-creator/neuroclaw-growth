@@ -1,0 +1,247 @@
+{
+  "version": "1.0",
+  "profiles": [
+    {
+      "role": "goal_officer",
+      "inputContract": {
+        "fields": [
+          { "name": "businessSummary", "type": "string", "required": true, "description": "Business context" },
+          { "name": "targetCustomer", "type": "string", "required": true, "description": "Target customer" },
+          { "name": "timeHorizonDays", "type": "number", "required": true, "description": "Planning horizon in days" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "goalStatement", "type": "string", "required": true, "description": "Single-sentence goal" },
+          { "name": "successMetrics", "type": "string[]", "required": true, "description": "Measurable success metrics" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["goalStatement", "successMetrics"],
+        "minEvidenceLevel": "E1",
+        "verifier": "self"
+      }
+    },
+    {
+      "role": "strategist",
+      "inputContract": {
+        "fields": [
+          { "name": "businessSummary", "type": "string", "required": true, "description": "Business context" },
+          { "name": "goalStatement", "type": "string", "required": true, "description": "Goal to plan for" },
+          { "name": "preferredChannels", "type": "string[]", "required": true, "description": "Candidate channels" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "planSteps", "type": "string[]", "required": true, "description": "Ordered plan steps" },
+          { "name": "riskNotes", "type": "string[]", "required": true, "description": "Known risks and constraints" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["planSteps"],
+        "minEvidenceLevel": "E1",
+        "verifier": "peer_role"
+      }
+    },
+    {
+      "role": "content_editor",
+      "inputContract": {
+        "fields": [
+          { "name": "businessSummary", "type": "string", "required": true, "description": "Business context" },
+          { "name": "targetCustomer", "type": "string", "required": true, "description": "Target customer" },
+          { "name": "preferredChannels", "type": "string[]", "required": true, "description": "Preferred channels" },
+          { "name": "contentGoal", "type": "string", "required": true, "description": "Desired content outcome" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "contentAngles", "type": "string[]", "required": true, "description": "Generated content angles" },
+          { "name": "channelRecommendations", "type": "string[]", "required": true, "description": "Recommended channels" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["contentAngles", "channelRecommendations"],
+        "minEvidenceLevel": "E1",
+        "verifier": "self"
+      },
+      "tools": [
+        {
+          "toolKey": "browser_extract",
+          "capabilityRef": "browser_extract",
+          "scopes": ["read"],
+          "actionType": "browser_extract",
+          "requiresApproval": false
+        },
+        {
+          "toolKey": "mcp_generate_brief",
+          "capabilityRef": "capability_growth_simulation",
+          "scopes": ["read"],
+          "actionType": "mcp_generate_brief",
+          "requiresApproval": false
+        }
+      ]
+    },
+    {
+      "role": "conversion_writer",
+      "inputContract": {
+        "fields": [
+          { "name": "businessSummary", "type": "string", "required": true, "description": "Offer context" },
+          { "name": "targetCustomer", "type": "string", "required": true, "description": "Lead segment" },
+          { "name": "preferredChannels", "type": "string[]", "required": true, "description": "Outreach channels" },
+          { "name": "offerAsset", "type": "string", "required": true, "description": "Offer asset" },
+          { "name": "recipientEmail", "type": "string", "required": false, "description": "Optional recipient email for approved delivery" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "conversionDraft", "type": "string", "required": true, "description": "Conversion draft" },
+          { "name": "approvalPreview", "type": "string", "required": true, "description": "Approval preview" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["conversionDraft", "approvalPreview"],
+        "minEvidenceLevel": "E1",
+        "verifier": "human"
+      },
+      "tools": [
+        {
+          "toolKey": "mcp_generate_conversion_copy",
+          "capabilityRef": "mcp_generate_conversion_copy",
+          "scopes": ["read"],
+          "actionType": "mcp_generate_conversion_copy",
+          "requiresApproval": false
+        },
+        {
+          "toolKey": "notification_send_preview",
+          "capabilityRef": "notification_send_preview",
+          "scopes": ["read"],
+          "actionType": "notification_send_preview",
+          "requiresApproval": true
+        }
+      ]
+    },
+    {
+      "role": "channel_ops",
+      "inputContract": {
+        "fields": [
+          { "name": "businessSummary", "type": "string", "required": true, "description": "Business context" },
+          { "name": "preferredChannels", "type": "string[]", "required": true, "description": "Candidate channels" },
+          { "name": "contentAngles", "type": "string[]", "required": true, "description": "Angles to distribute" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "channelPlan", "type": "string", "required": true, "description": "Per-channel publish plan" },
+          { "name": "publishSchedule", "type": "string[]", "required": true, "description": "Proposed publish schedule" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["channelPlan", "publishSchedule"],
+        "minEvidenceLevel": "E1",
+        "verifier": "self"
+      },
+      "tools": [
+        {
+          "toolKey": "publish_xiaohongshu",
+          "capabilityRef": "capability_channel_publish_xiaohongshu",
+          "scopes": ["read"],
+          "requiresApproval": false
+        }
+      ]
+    },
+    {
+      "role": "analyst",
+      "inputContract": {
+        "fields": [
+          { "name": "businessSummary", "type": "string", "required": true, "description": "Business context" },
+          { "name": "targetCustomer", "type": "string", "required": true, "description": "Audience context" },
+          { "name": "preferredChannels", "type": "string[]", "required": true, "description": "Relevant channels" },
+          { "name": "metricsWindowDays", "type": "number", "required": true, "description": "Metrics review window" },
+          { "name": "metricsSummary", "type": "string", "required": false, "description": "Optional metrics digest for the review window" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "reviewSummary", "type": "string", "required": true, "description": "Weekly review summary" },
+          { "name": "nextActions", "type": "string[]", "required": true, "description": "Recommended follow-ups" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["reviewSummary", "nextActions"],
+        "minEvidenceLevel": "E1",
+        "verifier": "self"
+      },
+      "tools": [
+        {
+          "toolKey": "browser_extract",
+          "capabilityRef": "browser_extract",
+          "scopes": ["read"],
+          "actionType": "browser_extract",
+          "requiresApproval": false
+        },
+        {
+          "toolKey": "mcp_generate_review",
+          "capabilityRef": "mcp_generate_review",
+          "scopes": ["read"],
+          "actionType": "mcp_generate_review",
+          "requiresApproval": false
+        }
+      ]
+    },
+    {
+      "role": "compliance_reviewer",
+      "inputContract": {
+        "fields": [
+          { "name": "contentDraft", "type": "string", "required": true, "description": "Draft to review" },
+          { "name": "channelTarget", "type": "string", "required": true, "description": "Target channel" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "complianceVerdict", "type": "string", "required": true, "description": "Pass / block verdict" },
+          { "name": "blockedReasons", "type": "string[]", "required": true, "description": "Reasons if blocked" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["complianceVerdict"],
+        "minEvidenceLevel": "E2",
+        "verifier": "human"
+      },
+      "tools": [
+        {
+          "toolKey": "compliance_tos_check",
+          "capabilityRef": "capability_compliance_tos_check",
+          "scopes": ["read"],
+          "requiresApproval": false
+        },
+        {
+          "toolKey": "ratelimit_enforce",
+          "capabilityRef": "capability_ratelimit_enforce",
+          "scopes": ["read"],
+          "requiresApproval": false
+        }
+      ]
+    },
+    {
+      "role": "retro_officer",
+      "inputContract": {
+        "fields": [
+          { "name": "goalStatement", "type": "string", "required": true, "description": "Goal being reviewed" },
+          { "name": "metricsSummary", "type": "string", "required": true, "description": "Metrics digest" },
+          { "name": "reviewSummary", "type": "string", "required": false, "description": "Optional prior review" }
+        ]
+      },
+      "outputContract": {
+        "fields": [
+          { "name": "retroSummary", "type": "string", "required": true, "description": "Retrospective summary" },
+          { "name": "nextActions", "type": "string[]", "required": true, "description": "Follow-ups" }
+        ]
+      },
+      "acceptance": {
+        "requiredOutputFields": ["retroSummary", "nextActions"],
+        "minEvidenceLevel": "E1",
+        "verifier": "self"
+      }
+    }
+  ]
+}
