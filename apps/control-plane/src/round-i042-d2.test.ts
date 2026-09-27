@@ -291,20 +291,28 @@ describe("⑤ recoverStaleJobs", () => {
 });
 
 describe("⑥ migration 0014 rollback + rerun", () => {
-  it("is latest-only reversible; 0013 needs 0014 rolled back first", async () => {
+  it("is latest-only reversible; each rollback needs the later migration gone first", async () => {
     const db = await setupDb();
     expect(await runMigrations(db)).toEqual([]);
 
-    // 0013 is no longer the latest applied migration: 0014 must go first.
+    // 0015 is the latest applied migration: 0014 (and 0013 below it) can only
+    // be rolled back after 0015 is gone.
     await expect(rollbackMigration(db, "0013_run_lifecycle_checkpoints")).rejects.toThrow(
       /later migration/i
     );
+    await expect(rollbackMigration(db, "0014_checkpoint_seq_and_job_idempotency")).rejects.toThrow(
+      /later migration/i
+    );
+    expect(await rollbackMigration(db, "0015_agents_role")).toBe(true);
     expect(await rollbackMigration(db, "0014_checkpoint_seq_and_job_idempotency")).toBe(true);
 
     // seq (and the seq-returning read/write path) is gone until 0014 returns.
     await expect(loadCheckpoints(db, "run_i042d2_rb")).rejects.toThrow();
 
-    expect(await runMigrations(db)).toEqual(["0014_checkpoint_seq_and_job_idempotency"]);
+    expect(await runMigrations(db)).toEqual([
+      "0014_checkpoint_seq_and_job_idempotency",
+      "0015_agents_role"
+    ]);
     const checkpoint = await persistCheckpoint(db, {
       runId: "run_i042d2_rb",
       stage: "runtime",
