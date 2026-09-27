@@ -3,6 +3,7 @@ import {
   pgTable,
   text,
   integer,
+  bigint,
   boolean,
   real,
   index,
@@ -271,6 +272,10 @@ export const jobs = pgTable(
     type: text("type").notNull(), // 'execute_run' | 'resume_approved_run'
     status: text("status").notNull(), // 'pending' | 'claimed' | 'running' | 'completed' | 'failed' | 'retry_scheduled'
     payload: text("payload"), // JSON: { approvedActions?: string[] }
+    // I-042 D2: database-side dedup guard for resume actions. NULL for every
+    // pre-existing enqueue path; the plain unique index tolerates multiple
+    // NULLs, so those paths stay untouched.
+    idempotencyKey: text("idempotency_key"),
     maxAttempts: integer("max_attempts").notNull().default(3),
     attemptCount: integer("attempt_count").notNull().default(0),
     nextAttemptAt: text("next_attempt_at"),
@@ -280,7 +285,10 @@ export const jobs = pgTable(
     claimedAt: text("claimed_at"),
     completedAt: text("completed_at")
   },
-  (table) => [index("idx_jobs_status_next").on(table.status, table.nextAttemptAt)]
+  (table) => [
+    index("idx_jobs_status_next").on(table.status, table.nextAttemptAt),
+    uniqueIndex("idx_jobs_idempotency_key").on(table.idempotencyKey)
+  ]
 );
 
 export const jobAttempts = pgTable("job_attempts", {
@@ -297,16 +305,22 @@ export const jobAttempts = pgTable("job_attempts", {
 // Append-only; the same (run_id, stage) may recur across retries, so only a
 // surrogate id is unique. Physical created_at is TIMESTAMPTZ (see the
 // timestamp mapping note above); the app contract stays ISO-8601 UTC strings.
+// I-042 D2: `seq` (migration 0014) is the DB-assigned append order and the
+// authoritative read/resume order — (created_at, id) tie-breaking is gone.
 export const runLifecycleCheckpoints = pgTable(
   "run_lifecycle_checkpoints",
   {
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
     stage: text("stage").notNull(), // 'queued' | 'runtime' | 'waiting_approval' | 'completed' | 'failed'
-    createdAt: text("created_at").notNull()
+    createdAt: text("created_at").notNull(),
+    seq: bigint("seq", { mode: "number" })
+      .notNull()
+      .default(sql`nextval('run_lifecycle_checkpoints_seq_seq')`)
   },
   (table) => [
-    index("idx_run_lifecycle_checkpoints_run_created").on(table.runId, table.createdAt)
+    index("idx_run_lifecycle_checkpoints_run_created").on(table.runId, table.createdAt),
+    index("idx_run_lifecycle_checkpoints_run_seq").on(table.runId, table.seq)
   ]
 );
 

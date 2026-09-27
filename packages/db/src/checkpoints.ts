@@ -20,30 +20,51 @@ export const LIFECYCLE_CHECKPOINT_STAGES = [
 
 export type LifecycleCheckpointStage = (typeof LIFECYCLE_CHECKPOINT_STAGES)[number];
 
-/** Durable projection of the worker's in-memory lifecycle checkpoint. */
-export interface PersistedLifecycleCheckpoint {
+/** Input / in-memory projection of a lifecycle checkpoint (no DB identity). */
+export interface LifecycleCheckpoint {
   runId: string;
   stage: LifecycleCheckpointStage;
   createdAt: string;
 }
 
 /**
+ * I-042 D2: persisted row. `id` is the stable checkpoint identity used by the
+ * resume idempotency key; `seq` is the database-assigned append order
+ * (migration 0014) and the authoritative read/resume order.
+ */
+export interface PersistedLifecycleCheckpoint extends LifecycleCheckpoint {
+  id: string;
+  seq: number;
+}
+
+/**
  * Append one lifecycle checkpoint. The call is not idempotent by design: the
  * checkpoint stream is an append-only log where the same (runId, stage) may
- * recur (e.g. retries). Returns an echo of the stored projection.
+ * recur (e.g. retries). Returns the stored row (DB-assigned id and seq
+ * included).
  */
 export async function persistCheckpoint(
   db: Database,
-  checkpoint: PersistedLifecycleCheckpoint
+  checkpoint: LifecycleCheckpoint
 ): Promise<PersistedLifecycleCheckpoint> {
-  await db.insert(runLifecycleCheckpoints).values({
-    id: `chk_${randomUUID()}`,
-    runId: checkpoint.runId,
-    stage: checkpoint.stage,
-    createdAt: checkpoint.createdAt
-  });
+  const id = `chk_${randomUUID()}`;
+  const rows = await db
+    .insert(runLifecycleCheckpoints)
+    .values({
+      id,
+      runId: checkpoint.runId,
+      stage: checkpoint.stage,
+      createdAt: checkpoint.createdAt
+    })
+    .returning({
+      id: runLifecycleCheckpoints.id,
+      seq: runLifecycleCheckpoints.seq
+    });
 
+  const stored = rows[0];
   return {
+    id: stored?.id ?? id,
+    seq: Number(stored?.seq ?? 0),
     runId: checkpoint.runId,
     stage: checkpoint.stage,
     createdAt: checkpoint.createdAt
@@ -51,9 +72,13 @@ export async function persistCheckpoint(
 }
 
 /**
- * Load the persisted checkpoint stream for one run, oldest first. Ordering is
- * (created_at, id): created_at has millisecond resolution, so id breaks ties
- * deterministically. Unknown runs return an empty list.
+ * Load the persisted checkpoint stream for one run, oldest first.
+ *
+ * Ordering is `seq` (migration 0014): a database-assigned, append-only total
+ * order, i.e. the only causally correct write order. D1's (created_at, id)
+ * tie-break is deliberately gone — created_at has millisecond resolution and
+ * id is a random UUID, so it was deterministic but not causal. Unknown runs
+ * return an empty list.
  */
 export async function loadCheckpoints(
   db: Database,
@@ -61,19 +86,23 @@ export async function loadCheckpoints(
 ): Promise<PersistedLifecycleCheckpoint[]> {
   const rows = await db
     .select({
+      id: runLifecycleCheckpoints.id,
       runId: runLifecycleCheckpoints.runId,
       stage: runLifecycleCheckpoints.stage,
-      createdAt: runLifecycleCheckpoints.createdAt
+      createdAt: runLifecycleCheckpoints.createdAt,
+      seq: runLifecycleCheckpoints.seq
     })
     .from(runLifecycleCheckpoints)
     .where(eq(runLifecycleCheckpoints.runId, runId))
-    .orderBy(asc(runLifecycleCheckpoints.createdAt), asc(runLifecycleCheckpoints.id));
+    .orderBy(asc(runLifecycleCheckpoints.seq));
 
   return rows.map((row) => ({
+    id: row.id,
     runId: row.runId,
     stage: row.stage as LifecycleCheckpointStage,
     // TIMESTAMPTZ is normalized to an ISO-8601 UTC string; drivers may hand
     // back a Date, so re-serialize defensively.
-    createdAt: new Date(row.createdAt as string | Date).toISOString()
+    createdAt: new Date(row.createdAt as string | Date).toISOString(),
+    seq: Number(row.seq)
   }));
 }

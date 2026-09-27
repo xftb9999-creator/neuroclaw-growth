@@ -146,6 +146,7 @@ describe("AC-1-1 local Outbox", () => {
     expect(await runMigrations(db)).toEqual([]);
     await expect(rollbackMigration(db, "0005_outbox_events")).rejects.toThrow(/later migration/i);
     for (const migrationId of [
+      "0014_checkpoint_seq_and_job_idempotency",
       "0013_run_lifecycle_checkpoints",
       "0012_outbox_delivery_attempts",
       "0011_run_events",
@@ -167,7 +168,8 @@ describe("AC-1-1 local Outbox", () => {
       "0010_ac6_attempt_replay_audit",
       "0011_run_events",
       "0012_outbox_delivery_attempts",
-      "0013_run_lifecycle_checkpoints"
+      "0013_run_lifecycle_checkpoints",
+      "0014_checkpoint_seq_and_job_idempotency"
     ]);
     expect(await runMigrations(db)).toEqual([]);
   });

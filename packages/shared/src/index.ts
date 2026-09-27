@@ -499,7 +499,10 @@ export const rolePermissions: Record<Role, readonly string[]> = {
     "registry:write",
     // W2 §2.3 dead-letter replay: admin-only, fail-closed (503 unless the
     // dispatch kill switch is on). No operator/viewer grant on purpose.
-    "outbox:replay"
+    "outbox:replay",
+    // I-042 D2 checkpoint resume (GM ruling 2026-09-27): admin-only — a
+    // resume re-executes a run's pipeline, so no operator/viewer grant.
+    "run:resume"
   ],
   operator: [
     "workspace:read",

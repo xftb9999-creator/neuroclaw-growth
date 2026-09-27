@@ -154,6 +154,7 @@ describe("AC-6-1 release-gate remediation", () => {
     const { db } = await setup();
     expect(await runMigrations(db)).toEqual([]);
     await expect(rollbackMigration(db, "0009_growth_work_items")).rejects.toThrow(/later migration/i);
+    expect(await rollbackMigration(db, "0014_checkpoint_seq_and_job_idempotency")).toBe(true);
     expect(await rollbackMigration(db, "0013_run_lifecycle_checkpoints")).toBe(true);
     expect(await rollbackMigration(db, "0012_outbox_delivery_attempts")).toBe(true);
     expect(await rollbackMigration(db, "0011_run_events")).toBe(true);
@@ -164,7 +165,8 @@ describe("AC-6-1 release-gate remediation", () => {
       "0010_ac6_attempt_replay_audit",
       "0011_run_events",
       "0012_outbox_delivery_attempts",
-      "0013_run_lifecycle_checkpoints"
+      "0013_run_lifecycle_checkpoints",
+      "0014_checkpoint_seq_and_job_idempotency"
     ]);
     expect(await runMigrations(db)).toEqual([]);
   });

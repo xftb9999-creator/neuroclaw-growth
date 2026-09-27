@@ -64,6 +64,7 @@ export {
   persistCheckpoint,
   loadCheckpoints,
   LIFECYCLE_CHECKPOINT_STAGES,
+  type LifecycleCheckpoint,
   type LifecycleCheckpointStage,
   type PersistedLifecycleCheckpoint
 } from "./checkpoints.js";

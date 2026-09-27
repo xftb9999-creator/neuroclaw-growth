@@ -21,7 +21,8 @@ import { DurableJobQueue } from "./index.js";
 /**
  * I-042 D1: lifecycle checkpoints of the durable job queue are persisted to
  * `run_lifecycle_checkpoints` (migration 0013) and survive a store reopen.
- * Resume semantics over this stream are explicitly deferred to D2.
+ * D2 added `seq` + `jobs.idempotency_key` (migration 0014) and resume
+ * semantics on top; this file pins the D1 persistence contract it still owns.
  */
 
 const openDatabases: Database[] = [];
@@ -72,10 +73,18 @@ describe("I-042 D1 run lifecycle checkpoint persistence", () => {
       createdAt: "2026-09-27T08:00:01.000Z"
     };
 
-    expect(await persistCheckpoint(db, first)).toEqual(first);
-    expect(await persistCheckpoint(db, second)).toEqual(second);
+    const storedFirst = await persistCheckpoint(db, first);
+    const storedSecond = await persistCheckpoint(db, second);
+    // D2: stored rows carry DB identity (id) + authoritative write order (seq).
+    expect(storedFirst).toMatchObject(first);
+    expect(storedSecond).toMatchObject(second);
+    expect(storedFirst.id).toMatch(/^chk_/);
+    expect(storedFirst.seq).toBeLessThan(storedSecond.seq);
 
-    expect(await loadCheckpoints(db, first.runId)).toEqual([first, second]);
+    const loaded = await loadCheckpoints(db, first.runId);
+    expect(
+      loaded.map((cp) => ({ runId: cp.runId, stage: cp.stage, createdAt: cp.createdAt }))
+    ).toEqual([first, second]);
   });
 
   it("is readable from a fresh queue instance over the same database", async () => {
@@ -108,24 +117,37 @@ describe("I-042 D1 run lifecycle checkpoint persistence", () => {
 
     const second = await createDb({ url });
     openDatabases.push(second);
-    expect(await loadCheckpoints(second, checkpoint.runId)).toEqual([checkpoint]);
+    const loaded = await loadCheckpoints(second, checkpoint.runId);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject(checkpoint);
+    expect(loaded[0].seq).toBeGreaterThan(0);
   });
 
-  it("rolls back and re-applies migration 0013 cleanly", async () => {
+  it("rolls back and re-applies migrations 0014 + 0013 in order", async () => {
     const db = await setupDb();
     expect(await runMigrations(db)).toEqual([]);
 
+    // 0013 is no longer the latest applied migration: 0014 must go first.
+    await expect(rollbackMigration(db, "0013_run_lifecycle_checkpoints")).rejects.toThrow(
+      /later migration/i
+    );
+    expect(await rollbackMigration(db, "0014_checkpoint_seq_and_job_idempotency")).toBe(true);
     expect(await rollbackMigration(db, "0013_run_lifecycle_checkpoints")).toBe(true);
     await expect(loadCheckpoints(db, "run_i042_after_rollback")).rejects.toThrow();
 
-    expect(await runMigrations(db)).toEqual(["0013_run_lifecycle_checkpoints"]);
+    expect(await runMigrations(db)).toEqual([
+      "0013_run_lifecycle_checkpoints",
+      "0014_checkpoint_seq_and_job_idempotency"
+    ]);
     const checkpoint = {
       runId: "run_i042_after_rollback",
       stage: "runtime" as const,
       createdAt: "2026-09-27T10:00:00.000Z"
     };
     await persistCheckpoint(db, checkpoint);
-    expect(await loadCheckpoints(db, checkpoint.runId)).toEqual([checkpoint]);
+    const loaded = await loadCheckpoints(db, checkpoint.runId);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject(checkpoint);
   });
 
   it("returns an empty list for a run with no checkpoints", async () => {

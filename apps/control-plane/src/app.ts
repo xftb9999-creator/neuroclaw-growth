@@ -1007,6 +1007,35 @@ export function createApp(
     }
   });
 
+  // I-042 D2: explicit checkpoint resume — admin-only (`run:resume`, GM ruling
+  // 2026-09-27). Origin selection, fail-closed handling and the
+  // (runId, origin checkpoint) idempotency key live in the durable queue.
+  // 404 unknown run (NotFoundError via getRun); 409 + code `resume_unavailable`
+  // when fail-closed (no causally defined origin — never a silent full
+  // replay); 200 with the resume outcome (`enqueued` / `already_enqueued` /
+  // `noop`) otherwise. No RunStatus is introduced: the run row is untouched.
+  api.post("/runs/:runId/resume", requirePermission("run:resume"), async (c) => {
+    try {
+      const targetRun = await service.getRun(c.req.param("runId"));
+      const denied = await ensureWorkspaceAccess(service, c, targetRun.workspaceId);
+      if (denied) return denied;
+      const { run, result } = await service.resumeRunFromCheckpoint(c.req.param("runId"));
+      if (result.status === "rejected") {
+        return c.json(
+          {
+            message: `Checkpoint resume unavailable for run '${run.id}' (${result.reason ?? "no_origin"})`,
+            code: "resume_unavailable",
+            result
+          },
+          409
+        );
+      }
+      return c.json({ run, result });
+    } catch (error) {
+      return handleError(error, c);
+    }
+  });
+
   api.patch(
     "/memory/:memoryId",
     requirePermission("memory:write"),

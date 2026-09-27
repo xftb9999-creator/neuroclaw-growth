@@ -858,6 +858,57 @@ export const MIGRATIONS: Migration[] = [
     // The table is isolated from existing analytics data, so local rollback is
     // safe and re-running 0013 recreates the same contract via IF NOT EXISTS.
     rollbackStatements: [`DROP TABLE IF EXISTS run_lifecycle_checkpoints`]
+  },
+  {
+    // I-042 D2 (GM-approved): resume semantics need a causal write order and a
+    // database-side dedup guard.
+    //
+    //   * `run_lifecycle_checkpoints.seq` — a sequence-assigned, append-only
+    //     order column. D1's (created_at, id) read order broke ties with a
+    //     random UUID, i.e. deterministically but not causally; seq is the
+    //     only authoritative write order for choosing a resume origin. Old
+    //     rows are backfilled in their previous read order ((created_at, id))
+    //     so history keeps its existing best-known ordering.
+    //   * `jobs.idempotency_key` + unique index — the dedup guard for resume
+    //     actions. Plain (non-partial) unique index: Postgres allows multiple
+    //     NULLs, so every existing enqueue path (which sets no key) is
+    //     unaffected. Repeated resume calls return the existing jobId.
+    id: "0014_checkpoint_seq_and_job_idempotency",
+    statements: [
+      `CREATE SEQUENCE IF NOT EXISTS run_lifecycle_checkpoints_seq_seq`,
+      `ALTER TABLE run_lifecycle_checkpoints ADD COLUMN IF NOT EXISTS seq BIGINT`,
+      `UPDATE run_lifecycle_checkpoints c
+         SET seq = ordered.rn
+         FROM (
+           SELECT id, row_number() OVER (ORDER BY created_at ASC, id ASC) AS rn
+           FROM run_lifecycle_checkpoints
+           WHERE seq IS NULL
+         ) AS ordered
+         WHERE c.id = ordered.id`,
+      `ALTER TABLE run_lifecycle_checkpoints ALTER COLUMN seq SET NOT NULL`,
+      `SELECT setval(
+         'run_lifecycle_checkpoints_seq_seq',
+         (SELECT COALESCE(MAX(seq), 0) + 1 FROM run_lifecycle_checkpoints),
+         false
+       )`,
+      `ALTER TABLE run_lifecycle_checkpoints
+         ALTER COLUMN seq SET DEFAULT nextval('run_lifecycle_checkpoints_seq_seq')`,
+      `CREATE INDEX IF NOT EXISTS idx_run_lifecycle_checkpoints_run_seq
+         ON run_lifecycle_checkpoints(run_id, seq)`,
+      `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key
+         ON jobs(idempotency_key)`
+    ],
+    // Local rollback is safe: both additions are new columns with explicit
+    // reverse SQL, and re-running 0014 recreates the same contract via
+    // IF NOT EXISTS. Executed in reverse array order (see rollbackMigration):
+    // drop seq first (its index/default go with the column), then the
+    // sequence, then the jobs column (its unique index goes with it).
+    rollbackStatements: [
+      `ALTER TABLE jobs DROP COLUMN IF EXISTS idempotency_key`,
+      `DROP SEQUENCE IF EXISTS run_lifecycle_checkpoints_seq_seq`,
+      `ALTER TABLE run_lifecycle_checkpoints DROP COLUMN IF EXISTS seq`
+    ]
   }
 ];
 

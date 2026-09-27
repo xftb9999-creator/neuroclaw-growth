@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { getTraceLog, type TraceLog } from "@neuroclaw/observability";
 import { RuntimeWorker, type RuntimeExecutionResult } from "@neuroclaw/runtime-worker";
@@ -11,6 +11,8 @@ import { eq, and, lte, asc, sql } from "drizzle-orm";
 
 import {
   type Database,
+  type LifecycleCheckpoint,
+  type LifecycleCheckpointStage,
   type PersistedLifecycleCheckpoint,
   jobs,
   jobAttempts,
@@ -25,15 +27,21 @@ import type { AiUsageSample } from "@neuroclaw/agent-core";
 // Types
 // ---------------------------------------------------------------------------
 
-export type JobType = "execute_run" | "resume_approved_run" | "embed_knowledge";
+export type JobType =
+  | "execute_run"
+  | "resume_approved_run"
+  | "resume_from_checkpoint"
+  | "embed_knowledge";
 
-/** Optional JSON payload carried by a job (Round O/V/U). */
+/** Optional JSON payload carried by a job (Round O/V/U, I-042 D2). */
 export interface JobPayload {
   approvedActions?: AdapterActionType[];
   knowledgeId?: string;
   text?: string;
   /** Relay instance id (Round V): lets the worker mirror relay state. */
   relayId?: string;
+  /** I-042 D2: checkpoint the resume job was derived from (audit/digest). */
+  resumeFromCheckpointId?: string;
 }
 export type JobStatus =
   | "pending"
@@ -47,12 +55,49 @@ export type JobStatus =
  * I-042 D1: the checkpoint projection is now owned by @neuroclaw/db (its
  * durable home is `run_lifecycle_checkpoints`, migration 0013); the worker
  * keeps the same public type surface for existing consumers.
+ *
+ * I-042 D2: `LifecycleCheckpoint` is the input/in-memory shape while
+ * `PersistedLifecycleCheckpoint` adds the DB-assigned identity (id) and the
+ * authoritative append order (seq).
  */
-export type LifecycleCheckpoint = PersistedLifecycleCheckpoint;
+export type { LifecycleCheckpoint, PersistedLifecycleCheckpoint };
 
 export interface EnqueueOptions {
   maxAttempts?: number;
   payload?: JobPayload;
+  /**
+   * I-042 D2: database-enforced dedup key (unique index on
+   * `jobs.idempotency_key`). When set, a repeated enqueue returns the
+   * existing jobId instead of inserting a second job.
+   */
+  idempotencyKey?: string;
+}
+
+/**
+ * I-042 D2: outcome of an explicit checkpoint-resume request.
+ *   * `enqueued` — a fresh resume job was created (idempotency key proves it);
+ *   * `already_enqueued` — a matching/live resume job already existed, reused;
+ *   * `noop` — the origin stage is terminal or waits for approval; no job;
+ *   * `rejected` — fail-closed (no causally defined origin), no job.
+ */
+export interface ResumeFromCheckpointResult {
+  status: "enqueued" | "already_enqueued" | "noop" | "rejected";
+  runId: string;
+  jobId?: string;
+  checkpointId?: string;
+  stage?: LifecycleCheckpointStage;
+  reason?: string;
+}
+
+/**
+ * I-042 D2: audit digest for a resume action — sha256(origin checkpoint id +
+ * serialized payload). Recorded in traces so a resume can be re-identified
+ * without replaying the job row.
+ */
+function resumeDigest(checkpointId: string, payload: JobPayload): string {
+  return createHash("sha256")
+    .update(`${checkpointId}|${JSON.stringify(payload)}`)
+    .digest("hex");
 }
 
 export interface ProcessResult {
@@ -87,21 +132,39 @@ export class DurableJobQueue {
       type
     });
     try {
+      // I-042 D2: idempotent enqueue. With an explicit key the first caller
+      // wins; every later caller gets the existing jobId back — including
+      // under a race, where the losing INSERT trips the unique index on
+      // `jobs.idempotency_key` and we re-read the winner.
+      if (options.idempotencyKey) {
+        const existing = await this.findJobByIdempotencyKey(options.idempotencyKey);
+        if (existing) return existing.id;
+      }
+
       const jobId = `job_${randomUUID()}`;
       const now = new Date().toISOString();
 
-      await this.db.insert(jobs).values({
-        id: jobId,
-        runId: run.id,
-        type,
-        status: "pending",
-        payload: options.payload ? JSON.stringify(options.payload) : null,
-        maxAttempts: options.maxAttempts ?? 3,
-        attemptCount: 0,
-        nextAttemptAt: now,
-        createdAt: now,
-        updatedAt: now
-      });
+      try {
+        await this.db.insert(jobs).values({
+          id: jobId,
+          runId: run.id,
+          type,
+          status: "pending",
+          payload: options.payload ? JSON.stringify(options.payload) : null,
+          idempotencyKey: options.idempotencyKey ?? null,
+          maxAttempts: options.maxAttempts ?? 3,
+          attemptCount: 0,
+          nextAttemptAt: now,
+          createdAt: now,
+          updatedAt: now
+        });
+      } catch (insertError) {
+        if (options.idempotencyKey) {
+          const raced = await this.findJobByIdempotencyKey(options.idempotencyKey);
+          if (raced) return raced.id;
+        }
+        throw insertError;
+      }
 
       await this.recordCheckpoint(run.id, "queued");
       this.traceLog.record({
@@ -267,6 +330,23 @@ export class DurableJobQueue {
         action: "job_completed",
         metadata: { jobId: claimed.jobId, runId: claimed.runId, status: result.run.status }
       });
+
+      // I-042 D2: a completed resume carries its origin + digest for audit and
+      // short-circuit checks. Execution itself reuses the existing pipeline
+      // (partial continuation is a deferred runtime-worker item).
+      if (claimed.type === "resume_from_checkpoint") {
+        const checkpointId = claimed.payload?.resumeFromCheckpointId ?? "";
+        this.traceLog.record({
+          scope: "durable-job-queue",
+          action: "job_resumed_from_checkpoint",
+          metadata: {
+            jobId: claimed.jobId,
+            runId: claimed.runId,
+            resumeFromCheckpointId: checkpointId,
+            digest: resumeDigest(checkpointId, claimed.payload ?? {})
+          }
+        });
+      }
 
       return {
         jobId: claimed.jobId,
@@ -474,6 +554,18 @@ export class DurableJobQueue {
       )
       .returning();
 
+    // I-042 D2 (GM decision): recovery keeps its redelivery semantics — the
+    // job goes back to `pending` and will be claimed into a full replay. It
+    // never resumes from a checkpoint and never touches checkpoint rows; it
+    // only gains this observability marker.
+    for (const job of recovered) {
+      this.traceLog.record({
+        scope: "durable-job-queue",
+        action: "job_recovered",
+        metadata: { jobId: job.id, runId: job.runId }
+      });
+    }
+
     return recovered.length;
   }
 
@@ -484,10 +576,148 @@ export class DurableJobQueue {
   /**
    * I-042 D1: read the durable checkpoint stream for a run. Unlike
    * `listCheckpoints`, this survives a fresh store instance over the same
-   * database — the read path the D2 resume semantics will build on.
+   * database — the read path the D2 resume semantics build on.
    */
-  async listPersistedCheckpoints(runId: string): Promise<LifecycleCheckpoint[]> {
+  async listPersistedCheckpoints(runId: string): Promise<PersistedLifecycleCheckpoint[]> {
     return loadCheckpoints(this.db, runId);
+  }
+
+  /**
+   * I-042 D2: explicit checkpoint-resume entry point (human/API trigger only;
+   * `recoverStaleJobs` deliberately keeps its redelivery+replay semantics and
+   * never calls this).
+   *
+   * Origin = newest persisted checkpoint by database write order (seq), i.e.
+   * the only causally correct choice. Fail-closed: with no checkpoint there is
+   * no defined origin, so the request is rejected (`resume_unavailable`) and
+   * never silently degrades into a full replay.
+   *
+   * Stage mapping (design §5): queued / runtime / failed enqueue a resume job;
+   * waiting_approval and completed are no-ops. The dedup object is the resume
+   * action, not checkpoint rows: idempotency key = (runId, origin checkpoint
+   * id), enforced by the unique index on `jobs.idempotency_key`, so repeated
+   * calls return the existing jobId. Resume never mutates the original job
+   * row: its attempts budget is independent (`maxAttempts` on the resume job
+   * only).
+   */
+  async resumeRunFromCheckpoint(run: Run): Promise<ResumeFromCheckpointResult> {
+    const span = this.traceLog.startSpan("durable-job-queue", "resumeRunFromCheckpoint", {
+      runId: run.id
+    });
+    try {
+      const checkpoints = await this.listPersistedCheckpoints(run.id);
+      const origin = checkpoints.at(-1);
+      if (!origin) {
+        this.traceLog.record({
+          scope: "durable-job-queue",
+          action: "resume_unavailable",
+          metadata: { runId: run.id, reason: "no_checkpoint" }
+        });
+        return { status: "rejected", runId: run.id, reason: "resume_unavailable" };
+      }
+
+      // In-flight guard: a live resume job for this run is returned as-is.
+      // (Enqueueing grew the checkpoint stream a `queued` row, so computing
+      // the key from the newest checkpoint alone would no longer match it.)
+      const active = await this.db
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.runId, run.id),
+            eq(jobs.type, "resume_from_checkpoint"),
+            sql`${jobs.status} IN ('pending', 'claimed', 'running', 'retry_scheduled')`
+          )
+        )
+        .limit(1);
+      if (active[0]) {
+        return {
+          status: "already_enqueued",
+          runId: run.id,
+          jobId: active[0].id,
+          checkpointId: origin.id,
+          stage: origin.stage
+        };
+      }
+
+      if (origin.stage === "waiting_approval" || origin.stage === "completed") {
+        return {
+          status: "noop",
+          runId: run.id,
+          checkpointId: origin.id,
+          stage: origin.stage,
+          reason: origin.stage
+        };
+      }
+
+      if (origin.stage !== "queued" && origin.stage !== "runtime" && origin.stage !== "failed") {
+        // Defensive: an unrecognized origin stage can never be resumed blindly.
+        this.traceLog.record({
+          scope: "durable-job-queue",
+          action: "resume_unavailable",
+          metadata: { runId: run.id, reason: "unknown_origin_stage" }
+        });
+        return { status: "rejected", runId: run.id, reason: "resume_unavailable" };
+      }
+
+      // Idempotency: (runId, origin checkpoint id). Same-origin duplicates
+      // (e.g. two operators racing on the same newest checkpoint) collapse to
+      // one job; the unique index is the database-side guard.
+      const idempotencyKey = `resume:${run.id}:${origin.id}`;
+      const existing = await this.findJobByIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return {
+          status: "already_enqueued",
+          runId: run.id,
+          jobId: existing.id,
+          checkpointId: origin.id,
+          stage: origin.stage
+        };
+      }
+
+      const payload: JobPayload = { resumeFromCheckpointId: origin.id };
+      const digest = resumeDigest(origin.id, payload);
+      const jobId = await this.enqueue(run, "resume_from_checkpoint", {
+        payload,
+        idempotencyKey
+      });
+
+      this.traceLog.record({
+        scope: "durable-job-queue",
+        action: "resume_enqueued",
+        metadata: {
+          runId: run.id,
+          jobId,
+          resumeFromCheckpointId: origin.id,
+          stage: origin.stage,
+          digest
+        }
+      });
+
+      span.setAttribute("jobId", jobId);
+      span.setAttribute("origin.stage", origin.stage);
+      return {
+        status: "enqueued",
+        runId: run.id,
+        jobId,
+        checkpointId: origin.id,
+        stage: origin.stage
+      };
+    } catch (error) {
+      span.recordError(error as Error);
+      throw error;
+    } finally {
+      span.end();
+    }
+  }
+
+  private async findJobByIdempotencyKey(key: string): Promise<{ id: string } | null> {
+    const rows = await this.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(eq(jobs.idempotencyKey, key))
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   private async incrementAttemptCount(jobId: string, now: string): Promise<number> {

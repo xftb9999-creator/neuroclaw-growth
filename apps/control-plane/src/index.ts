@@ -147,7 +147,7 @@ import {
   globalRegistry,
   listTemplates as listBuiltinTemplates
 } from "@neuroclaw/templates";
-import { TemporalWorkerSkeleton, type JobPayload } from "@neuroclaw/temporal-worker";
+import { TemporalWorkerSkeleton, type JobPayload, type ResumeFromCheckpointResult } from "@neuroclaw/temporal-worker";
 import { generateStructuredForAgent, embedText, isEmbeddingEnabled } from "@neuroclaw/agent-core";
 import { playbooks as playbooksTable } from "@neuroclaw/db";
 import { resolveOutboxDispatchConfig } from "./outbox-dispatcher.js";
@@ -4590,6 +4590,45 @@ export class ControlPlaneService {
 
       span.setAttribute("result.status", resumed.run.status);
       return resumed.run;
+    } catch (error) {
+      span.recordError(error as Error);
+      throw error;
+    } finally {
+      span.end();
+    }
+  }
+
+  /**
+   * I-042 D2: explicit checkpoint resume (human/API trigger). Origin
+   * selection, fail-closed handling (no checkpoint → `resume_unavailable`,
+   * no job created) and the (runId, origin checkpoint) idempotency key all
+   * live in the durable queue. Durable mode leaves the enqueued job to the
+   * background job loop; inline mode executes it here (mirrors the
+   * updateApproval split). Resume never consumes the original job's
+   * attempts budget.
+   */
+  async resumeRunFromCheckpoint(runId: string): Promise<{
+    run: Run;
+    result: ResumeFromCheckpointResult;
+  }> {
+    const span = this.traceLog.startSpan("control-plane", "resumeRunFromCheckpoint", { runId });
+    try {
+      const run = await this.getRun(runId);
+      const result = await this.temporalWorker.resumeRunFromCheckpoint(run);
+
+      if (!this.durable && result.status === "enqueued" && result.jobId) {
+        const claimed = await this.temporalWorker.claimNext();
+        if (claimed && claimed.jobId === result.jobId) {
+          const execution = await this.temporalWorker.processClaimed(claimed, run);
+          if (execution.result) {
+            await this.persistRunProjection(execution.result.run, "update");
+            await this.persistRuntimeEventStream(execution.result.run, execution.result.events);
+          }
+        }
+      }
+
+      span.setAttribute("result.status", result.status);
+      return { run, result };
     } catch (error) {
       span.recordError(error as Error);
       throw error;
