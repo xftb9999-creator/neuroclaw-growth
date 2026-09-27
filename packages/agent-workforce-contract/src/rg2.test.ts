@@ -199,14 +199,26 @@ describe("RG-2c skills / tools / permissions 收紧", () => {
     ).toBe(false);
   });
 
-  it("memoryScope/kpi/escalation 仍为过渡键位（RG-3 前不收紧）", () => {
-    const parsed = agentProfileSchema.safeParse({
+  it("memoryScope/kpi/escalation 已由 RG-3 收紧（过渡空对象被拒；合法值通过）", () => {
+    const loose = agentProfileSchema.safeParse({
       ...baseProfile(),
       memoryScope: {},
       kpi: [],
       escalation: {}
     });
-    expect(parsed.success).toBe(true);
+    expect(loose.success).toBe(false);
+    const governed = agentProfileSchema.safeParse({
+      ...baseProfile(),
+      memoryScope: {
+        visibility: "private",
+        namespace: "content_editor",
+        retentionDays: 90,
+        readableNamespaces: []
+      },
+      kpi: [],
+      escalation: { reportsTo: "human", onFailure: "halt", maxRetries: 0 }
+    });
+    expect(governed.success).toBe(true);
   });
 });
 

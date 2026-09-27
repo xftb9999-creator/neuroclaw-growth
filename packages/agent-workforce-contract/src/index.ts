@@ -21,7 +21,9 @@
  * - RG-2 本批切片：① `capability-inventory.v1.json` 首版（schema + fingerprint + resolver）
  *   ② skills / tools / permissions 收紧 + write scope 授权链前置门禁。
  *   匹配器 tierC（RG-2b）复用 `shared/capability-matching.ts`（D5 唯一实现），
- *   接线方式待 GM 裁点③，本批不另建 `capability-match` 包；memoryScope/kpi/escalation 仍归 RG-3。
+ *   接线方式待 GM 裁点③，本批不另建 `capability-match` 包。
+ * - RG-3 本批切片：memoryScope / kpi / escalation 收紧（§3.6）+ `duty-decision.ts`
+ *   上岗裁决纯函数（不进包 barrel，循 RG-2b 非 barrel 先例）；插件化（AW-6）属 P-2，不做。
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -154,6 +156,92 @@ export const agentPermissionsSchema = z
 export type AgentPermissions = z.infer<typeof agentPermissionsSchema>;
 
 // ---------------------------------------------------------------------------
+// §3.6 RG-3：治理字段 memoryScope / kpi / escalation（提案 §二 字段 8/9/10）
+// ---------------------------------------------------------------------------
+
+/**
+ * 记忆可见性：复用 memory 层词汇 `"private" | "team"`
+ * （E3 实测：`packages/memory/src/index.ts:24`、`packages/db/src/schema.ts:241+`）。
+ */
+export const agentMemoryVisibilitySchema = z.enum(["private", "team"]);
+export type AgentMemoryVisibility = z.infer<typeof agentMemoryVisibilitySchema>;
+
+/**
+ * 记忆范围（提案 §二-8）：`{visibility, namespace, retentionDays, readableNamespaces}`。
+ * - `readableNamespaces` 为**显式白名单**：拒绝通配符（含 `*`）——跨工作区/项目一律禁止
+ *   （agent-workforce.md:520-521“scope 强制”口径），本包以结构约束落地（E2 解读）；
+ * - 重复项拒绝（确定性）；`retentionDays` / 各项为正整数。
+ */
+export const agentMemoryScopeSchema = z
+  .object({
+    visibility: agentMemoryVisibilitySchema,
+    /** 建议 = `role + agentKey`（提案 §二-8；agentKey 属 AW-0 完整草案，本包暂为自由串）。 */
+    namespace: z.string().min(1),
+    retentionDays: z.number().int().positive(),
+    readableNamespaces: z.array(z.string().min(1))
+  })
+  .strict()
+  .superRefine((scope, ctx) => {
+    const seen = new Set<string>();
+    scope.readableNamespaces.forEach((namespace, index) => {
+      if (namespace.includes("*")) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["readableNamespaces", index],
+          message: `readableNamespaces 须为显式白名单，不接受通配符: ${namespace}`
+        });
+      }
+      if (seen.has(namespace)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["readableNamespaces", index],
+          message: `readableNamespaces 重复项: ${namespace}`
+        });
+      }
+      seen.add(namespace);
+    });
+  });
+export type AgentMemoryScope = z.infer<typeof agentMemoryScopeSchema>;
+
+/**
+ * KPI 指标条目（提案 §二-9）：`{metricKey, target, unit, windowDays, evidenceLevelRequired}`。
+ * - 证据级别沿用 acceptance 口径 E0–E3（agent 产出不得自证 E4）；
+ * - “只允许可复算指标”需指标注册表（实测不存在）→ 结构层不可校验，属接线阶段（证据 deferred）。
+ */
+export const agentKpiEntrySchema = z
+  .object({
+    metricKey: z.string().min(1),
+    target: z.number(),
+    unit: z.string().min(1),
+    windowDays: z.number().int().positive(),
+    evidenceLevelRequired: acceptanceEvidenceLevelSchema
+  })
+  .strict();
+export type AgentKpiEntry = z.infer<typeof agentKpiEntrySchema>;
+
+/** 失败路径枚举（提案 §二-10）；`halt` 不得静默降级 = 运行期语义（执行器责任，结构层不可校验）。 */
+export const agentEscalationFailureModeSchema = z.enum(["retry", "degrade", "escalate", "halt"]);
+export type AgentEscalationFailureMode = z.infer<typeof agentEscalationFailureModeSchema>;
+
+/**
+ * 上报目标：岗位键 ∪ `"human"`。
+ * 解读：类型草案为 `AgentRoleKey`（提案 §二-10），校验点明确“`reportsTo` 可指向 human role”
+ * → 以 union 同时表达（`"human"` 非第 9 个岗位，不改 `AGENT_ROLE_KEYS`；E2 解读，待复核）。
+ */
+export const agentEscalationTargetSchema = z.union([agentRoleKeySchema, z.literal("human")]);
+export type AgentEscalationTarget = z.infer<typeof agentEscalationTargetSchema>;
+
+/** 上报关系与失败路径（提案 §二-10）：`{reportsTo, onFailure, maxRetries}`。 */
+export const agentEscalationSchema = z
+  .object({
+    reportsTo: agentEscalationTargetSchema,
+    onFailure: agentEscalationFailureModeSchema,
+    maxRetries: z.number().int().nonnegative()
+  })
+  .strict();
+export type AgentEscalation = z.infer<typeof agentEscalationSchema>;
+
+// ---------------------------------------------------------------------------
 // §4 AgentProfile — 4 必填 + 6 过渡默认键位（GM 裁决 2026-09-27）
 // ---------------------------------------------------------------------------
 
@@ -164,14 +252,14 @@ export const agentProfileSchema = z
     inputContract: agentInputContractSchema,
     outputContract: agentOutputContractSchema,
     acceptance: agentAcceptanceSchema,
-    // —— 6 过渡默认：skills/tools/permissions 已由 RG-2 收紧（可缺省；存在即须合规），
-    //    memoryScope/kpi/escalation 仍仅冻结键位，RG-3 收紧 ——
+    // —— 6 过渡默认：skills/tools/permissions 已由 RG-2 收紧、memoryScope/kpi/escalation
+    //    已由 RG-3 收紧（§3.6）；均可缺省，存在即须合规 ——
     skills: z.array(agentSkillBindingSchema).optional(),
     tools: z.array(agentToolBindingSchema).optional(),
     permissions: agentPermissionsSchema.optional(),
-    memoryScope: z.unknown().optional(),
-    kpi: z.unknown().optional(),
-    escalation: z.unknown().optional()
+    memoryScope: agentMemoryScopeSchema.optional(),
+    kpi: z.array(agentKpiEntrySchema).optional(),
+    escalation: agentEscalationSchema.optional()
   })
   .strict()
   .superRefine((profile, ctx) => {
@@ -314,8 +402,11 @@ export const CAPABILITY_INVENTORY_V1: CapabilityInventory =
 /** 事实源文件（用于指纹与快照复核）。 */
 export const CAPABILITY_INVENTORY_V1_FILE = "capability-inventory.v1.json";
 
-/** 确定性 JSON（递归排序键，口径与 `shared/capability-matching.ts` 一致）。 */
-function canonicalJson(value: unknown): string {
+/**
+ * 确定性 JSON（递归排序键，口径与 `shared/capability-matching.ts` 一致）。
+ * RG-3：导出供 `duty-decision.ts` 复算 inputFingerprint（同包复用，避免第二套序列化方言）。
+ */
+export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)

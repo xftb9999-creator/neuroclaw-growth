@@ -255,15 +255,20 @@ describe("agentProfileSchema 门禁", () => {
     expect(agentProfileSchema.safeParse(contentEditor).success).toBe(true);
   });
 
-  it("6 过渡键位被接受（RG-2 三字段已收紧为合法空值）", () => {
+  it("6 过渡键位被接受（RG-2/RG-3 收紧后须为合法值）", () => {
     const withDefaults = {
       ...contentEditor,
       skills: [],
       tools: [],
       permissions: { readScopes: [], writeScopes: [], maxRiskClass: "LOW", requiresApprovalFor: [] },
-      memoryScope: {},
+      memoryScope: {
+        visibility: "private",
+        namespace: "content_editor",
+        retentionDays: 90,
+        readableNamespaces: []
+      },
       kpi: [],
-      escalation: {}
+      escalation: { reportsTo: "human", onFailure: "halt", maxRetries: 0 }
     };
     expect(agentProfileSchema.safeParse(withDefaults).success).toBe(true);
   });
