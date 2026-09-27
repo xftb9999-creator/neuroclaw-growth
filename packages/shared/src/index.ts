@@ -137,7 +137,11 @@ export const createAgentInputSchema = z.object({
   description: z.string().optional(),
   focusAreas: z.array(z.string()).default([]),
   outputStyle: z.enum(["structured", "checklist", "copy"]).default("structured"),
-  toolNames: z.array(z.string()).default([])
+  toolNames: z.array(z.string()).default([]),
+  // AW-5 片1（GM 裁决②）：岗位键（AgentRoleKey）实例层承载。此处保持宽松
+  // string（零方言，枚举唯一来源＝@neuroclaw/agent-workforce-contract §1）；
+  // 严格值域校验在 control-plane 注册边界 fail-closed 完成。
+  role: z.string().optional()
 });
 export type CreateAgentInput = z.infer<typeof createAgentInputSchema>;
 
@@ -146,7 +150,9 @@ export const updateAgentInputSchema = z.object({
   persona: z.string().min(4).optional(),
   description: z.string().optional(),
   focusAreas: z.array(z.string()).optional(),
-  status: agentStatusSchema.optional()
+  status: agentStatusSchema.optional(),
+  // 同 createAgentInputSchema.role：宽松承载，边界严格解析。
+  role: z.string().optional()
 });
 export type UpdateAgentInput = z.infer<typeof updateAgentInputSchema>;
 

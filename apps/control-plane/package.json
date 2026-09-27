@@ -7,6 +7,7 @@
   "types": "./dist/index.d.ts",
   "dependencies": {
     "@neuroclaw/agent-core": "*",
+    "@neuroclaw/agent-workforce-contract": "*",
     "@neuroclaw/tooling-mcp": "*"
   }
 }

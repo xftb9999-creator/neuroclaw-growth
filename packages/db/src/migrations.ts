@@ -909,6 +909,17 @@ export const MIGRATIONS: Migration[] = [
       `DROP SEQUENCE IF EXISTS run_lifecycle_checkpoints_seq_seq`,
       `ALTER TABLE run_lifecycle_checkpoints DROP COLUMN IF EXISTS seq`
     ]
+  },
+  {
+    // AW-5 片1（GM 裁决②③）: instance-level work role for custom agents.
+    // Nullable so every pre-0015 row and every legacy create path (no role)
+    // stays valid; values are validated at the control-plane registration
+    // boundary via contract `agentRoleKeySchema` (fail-closed).
+    id: "0015_agents_role",
+    statements: [`ALTER TABLE agents ADD COLUMN IF NOT EXISTS role TEXT`],
+    // New nullable column only — dropping it loses nothing the schema did not
+    // introduce; re-running up recreates the same contract via IF NOT EXISTS.
+    rollbackStatements: [`ALTER TABLE agents DROP COLUMN IF EXISTS role`]
   }
 ];
 

@@ -39,6 +39,11 @@ import {
   type Database
 } from "@neuroclaw/db";
 import {
+  AGENT_ROLE_KEYS,
+  agentRoleKeySchema,
+  type AgentRoleKey
+} from "@neuroclaw/agent-workforce-contract";
+import {
   DrizzleMemoryStore,
   type MemoryRecord,
   type MemoryRecordType,
@@ -1508,25 +1513,40 @@ function estimateCostUsd(totalTokens: number): number | null {
 // Team playbooks — server-side relay orchestration registry (J5)
 // ---------------------------------------------------------------------------
 
+/**
+ * AW-5 片1（GM 裁决③）: 岗位映射（内置模板类型 → AgentRoleKey）。
+ * 枚举唯一来源＝@neuroclaw/agent-workforce-contract §1（零方言）；模板 catalog
+ * 本批不加 role 字段（缓议），映射常量作为内置 playbook 与后续接线的单一来源。
+ */
+export const TEMPLATE_ROLE_MAP = {
+  content_acquisition: "content_editor",
+  private_conversion: "conversion_writer",
+  weekly_review: "analyst"
+} as const satisfies Record<string, AgentRoleKey>;
+
 export interface TeamStep {
   templateType: string;
-  roleKey: string;
+  /** AW-5 片1 升级：roleKey 类型收窄为 contract §1 的 AgentRoleKey（内置 playbook 由 TEMPLATE_ROLE_MAP 派生）。 */
+  roleKey: AgentRoleKey;
   feedFrom: string[];
+}
+
+function builtinStep(
+  templateType: keyof typeof TEMPLATE_ROLE_MAP,
+  feedFrom: string[]
+): TeamStep {
+  return { templateType, roleKey: TEMPLATE_ROLE_MAP[templateType], feedFrom };
 }
 
 export const TEAM_PLAYBOOKS: Record<string, TeamStep[]> = {
   sprint: [
-    { templateType: "content_acquisition", roleKey: "content", feedFrom: [] },
-    {
-      templateType: "private_conversion",
-      roleKey: "conversion",
-      feedFrom: ["contentAngles", "channelRecommendations"]
-    },
-    { templateType: "weekly_review", roleKey: "review", feedFrom: ["conversionDraft"] }
+    builtinStep("content_acquisition", []),
+    builtinStep("private_conversion", ["contentAngles", "channelRecommendations"]),
+    builtinStep("weekly_review", ["conversionDraft"])
   ],
   contentReview: [
-    { templateType: "content_acquisition", roleKey: "content", feedFrom: [] },
-    { templateType: "weekly_review", roleKey: "review", feedFrom: ["contentAngles"] }
+    builtinStep("content_acquisition", []),
+    builtinStep("weekly_review", ["contentAngles"])
   ]
 };
 
@@ -1539,6 +1559,21 @@ function carriedSummary(payload: Record<string, unknown>, feedFrom: string[]): s
     })
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * AW-5 片1（GM 裁决②）: 注册边界 fail-closed 解析。
+ * shared 层仅宽松 string 承载 role；此处用 contract §1 枚举严格校验，
+ * 非法值直接拒绝（不发 DB 写、不进注册表）。
+ */
+function parseAgentRole(value: string, context: string): AgentRoleKey {
+  const parsed = agentRoleKeySchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid agent role for ${context}: '${value}' (expected one of ${AGENT_ROLE_KEYS.join(", ")})`
+    );
+  }
+  return parsed.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -1707,6 +1742,9 @@ export class ControlPlaneService {
     const rows = await this.db.select().from(agents);
     for (const row of rows) {
       if (row.status === "inactive") continue;
+      // AW-5 片1: 装载也是注册边界——旧行 role=NULL 兼容放行；一旦携带非法
+      // role 则 fail-closed（拒绝注册并中止装载，不静默降级）。
+      if (row.role != null) parseAgentRole(row.role, `custom agent ${row.slug}`);
       globalRegistry.register(this.agentRowToTemplate(row));
     }
     return rows.length;
@@ -1743,12 +1781,16 @@ export class ControlPlaneService {
       throw new Error(`Agent slug already exists: ${input.slug}`);
     }
 
+    const role =
+      input.role === undefined ? null : parseAgentRole(input.role, `custom agent ${input.slug}`);
+
     const row = {
       id: `agent_${randomUUID()}`,
       slug: input.slug,
       name: input.name,
       baseEngine: input.baseEngine,
       persona: input.persona,
+      role,
       description: input.description ?? null,
       focusAreas: JSON.stringify(input.focusAreas ?? []),
       outputStyle: input.outputStyle ?? "structured",
@@ -1778,6 +1820,7 @@ export class ControlPlaneService {
       name: row.name,
       baseEngine: row.baseEngine,
       persona: row.persona,
+      role: row.role ?? null,
       description: row.description ?? "",
       outputStyle: row.outputStyle,
       status: row.status,
@@ -1796,10 +1839,15 @@ export class ControlPlaneService {
       throw new NotFoundError(`Agent not found: ${agentId}`);
     }
     const row = rows[0];
+    const nextRole =
+      patch.role === undefined
+        ? row.role
+        : parseAgentRole(patch.role, `custom agent ${row.slug}`);
     const next = {
       ...row,
       name: patch.name ?? row.name,
       persona: patch.persona ?? row.persona,
+      role: nextRole,
       description: patch.description ?? row.description,
       focusAreas: patch.focusAreas ? JSON.stringify(patch.focusAreas) : row.focusAreas,
       status: patch.status ?? (row.status as "active" | "inactive")
@@ -1810,6 +1858,7 @@ export class ControlPlaneService {
       .set({
         name: next.name,
         persona: next.persona,
+        role: next.role,
         description: next.description,
         focusAreas: next.focusAreas,
         status: next.status

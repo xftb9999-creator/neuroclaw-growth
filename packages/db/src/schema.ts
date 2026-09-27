@@ -337,6 +337,9 @@ export const agents = pgTable("agents", {
   name: text("name").notNull(),
   baseEngine: text("base_engine").notNull(),
   persona: text("persona").notNull(),
+  // AW-5 片1: 岗位键（AgentRoleKey，contract §1）。可空过渡（旧行兼容）；
+  // 值域由 control-plane 注册边界 fail-closed 解析保证（migration 0015）。
+  role: text("role"),
   description: text("description"),
   focusAreas: text("focus_areas"), // JSON string[]
   outputStyle: text("output_style").notNull().default("structured"),
