@@ -4,6 +4,16 @@ import { z } from "zod";
 import { assertSemverRange, semverRangeSchema } from "./semver-range.js";
 
 /**
+ * @deprecated Legacy B3 §D1 dialect — retired 2026-09-27 (GM ruling, Option A).
+ * The sole authoritative PluginManifest dialect is `plugin.md §3.1` (L73-110:
+ * identity/compatibility/dependency/permission/lifecycle/entry/evidence). The
+ * canonical `pluginManifestSchema` / `PluginManifest` names belong to the new
+ * `@neuroclaw/plugin-contract` package (P1-1); this module is kept for history
+ * only — no new imports, pending deletion with the new package.
+ * Evidence: `.artifacts/impl/20260927-dialect-convergence.md`.
+ *
+ * --- Historical module docs (legacy dialect) ---
+ *
  * P-1 / D1: PluginManifest schema (B3 §D1 — "no self-built ABI").
  *
  * The manifest is a projection layer onto existing ecosystem formats, not a
@@ -27,7 +37,12 @@ import { assertSemverRange, semverRangeSchema } from "./semver-range.js";
  * unparseable rejects the manifest.
  */
 
-export const PLUGIN_SCHEMA_VERSION = "plugin.neuroclaw.v1";
+/**
+ * @deprecated Legacy dialect constant — superseded by the §3.1
+ * `@neuroclaw/plugin-contract` package (P1-1); renamed to vacate the
+ * canonical `PLUGIN_SCHEMA_VERSION` name.
+ */
+export const LEGACY_PLUGIN_SCHEMA_VERSION = "plugin.neuroclaw.v1";
 
 /** npm-scope-style identity, per D1.2 (`@namespace/name`). */
 const pluginIdSchema = z
@@ -86,9 +101,14 @@ const mcpDeclaresSchema = z
   })
   .strict();
 
-export const pluginManifestSchema = z
+/**
+ * @deprecated Legacy B3 §D1 manifest schema — retired; use the §3.1 dialect from
+ * `@neuroclaw/plugin-contract` (P1-1). Renamed to vacate the `pluginManifestSchema`
+ * name for the canonical package.
+ */
+export const legacyPluginManifestSchema = z
   .object({
-    schemaVersion: z.literal(PLUGIN_SCHEMA_VERSION),
+    schemaVersion: z.literal(LEGACY_PLUGIN_SCHEMA_VERSION),
     id: pluginIdSchema,
     version: semverVersionSchema,
     kind: z.enum(["skill", "mcp-server", "adapter", "pack"]),
@@ -226,11 +246,19 @@ export const pluginManifestSchema = z
     }
   });
 
-export type PluginManifest = z.infer<typeof pluginManifestSchema>;
+/**
+ * @deprecated Legacy type — see `legacyPluginManifestSchema`; use the §3.1
+ * `PluginManifest` from `@neuroclaw/plugin-contract`.
+ */
+export type LegacyPluginManifest = z.infer<typeof legacyPluginManifestSchema>;
 
-/** Parse and validate a PluginManifest payload. Exported so fail-closed cases are testable. */
-export function parsePluginManifest(raw: unknown): PluginManifest {
-  return pluginManifestSchema.parse(raw);
+/**
+ * Parse and validate a legacy PluginManifest payload. Exported so fail-closed
+ * cases are testable.
+ * @deprecated Use the §3.1 parser from `@neuroclaw/plugin-contract` (P1-1).
+ */
+export function parseLegacyPluginManifest(raw: unknown): LegacyPluginManifest {
+  return legacyPluginManifestSchema.parse(raw);
 }
 
 // Keep assertSemverRange referenced in this module's public surface docs so

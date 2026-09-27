@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  PLUGIN_SCHEMA_VERSION,
-  parsePluginManifest,
-  pluginManifestSchema
+  LEGACY_PLUGIN_SCHEMA_VERSION,
+  parseLegacyPluginManifest,
+  legacyPluginManifestSchema
 } from "./plugin-manifest.js";
 
 /**
- * P-1 / D1 acceptance: PluginManifest 的 fail-closed 硬约束（B3 §D1.4）。
+ * Legacy dialect acceptance (B3 §D1): PluginManifest 的 fail-closed 硬约束。
+ *
+ * 该方言于 2026-09-27 退役（GM 裁定 Option A；`plugin.md §3.1` 为唯一权威方言）；
+ * 符号已加 `legacy`/`Legacy` 前缀。本文件仅覆盖 legacy schema 自身行为，
+ * 新功能测试应针对 `@neuroclaw/plugin-contract`（P1-1）。
  *
  * - `.strict()`：未知字段一律拒绝（契约冻结点）；
  * - D1.4-1：`capabilities.provides` 必须可兑现（mcp tool 名或 skill/pack 的
@@ -17,7 +21,7 @@ import {
  */
 
 const validManifest = () => ({
-  schemaVersion: PLUGIN_SCHEMA_VERSION,
+  schemaVersion: LEGACY_PLUGIN_SCHEMA_VERSION,
   id: "@neuroclaw/example-adapter",
   version: "1.2.3",
   kind: "mcp-server",
@@ -55,9 +59,9 @@ const skillManifest = () => ({
 
 describe("P-1 plugin manifest: 基线与默认值", () => {
   it("parses a redeemable mcp-server manifest and applies defaults", () => {
-    const manifest = parsePluginManifest(validManifest());
+    const manifest = parseLegacyPluginManifest(validManifest());
 
-    expect(manifest.schemaVersion).toBe(PLUGIN_SCHEMA_VERSION);
+    expect(manifest.schemaVersion).toBe(LEGACY_PLUGIN_SCHEMA_VERSION);
     expect(manifest.id).toBe("@neuroclaw/example-adapter");
     expect(manifest.version).toBe("1.2.3");
     expect(manifest.requires.plugins).toEqual({});
@@ -68,16 +72,16 @@ describe("P-1 plugin manifest: 基线与默认值", () => {
 
   it("is strict at every level", () => {
     expect(() =>
-      pluginManifestSchema.parse({ ...validManifest(), unexpected: true })
+      legacyPluginManifestSchema.parse({ ...validManifest(), unexpected: true })
     ).toThrow();
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         capabilities: { layer: "L4", provides: ["tool_read"], extra: true }
       })
     ).toThrow();
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         sandbox: { ...validManifest().sandbox, extra: true }
       })
@@ -85,11 +89,11 @@ describe("P-1 plugin manifest: 基线与默认值", () => {
   });
 
   it("rejects plugin ids that do not follow the npm scope convention", () => {
-    expect(() => pluginManifestSchema.parse({ ...validManifest(), id: "no-scope" })).toThrow(
+    expect(() => legacyPluginManifestSchema.parse({ ...validManifest(), id: "no-scope" })).toThrow(
       "plugin id"
     );
     expect(() =>
-      pluginManifestSchema.parse({ ...validManifest(), id: "@Neuroclaw/example" })
+      legacyPluginManifestSchema.parse({ ...validManifest(), id: "@Neuroclaw/example" })
     ).toThrow("plugin id");
   });
 });
@@ -97,7 +101,7 @@ describe("P-1 plugin manifest: 基线与默认值", () => {
 describe("P-1 plugin manifest: D1.4-1 能力必须可兑现", () => {
   it("rejects a capability that matches no tool and no registered ref", () => {
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         capabilities: { layer: "L4", provides: ["tool_missing"] }
       })
@@ -105,10 +109,10 @@ describe("P-1 plugin manifest: D1.4-1 能力必须可兑现", () => {
   });
 
   it("accepts capabilityRefs only for kind skill/pack", () => {
-    expect(parsePluginManifest(skillManifest()).capabilities.provides).toEqual(["cap_read"]);
+    expect(parseLegacyPluginManifest(skillManifest()).capabilities.provides).toEqual(["cap_read"]);
 
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         kind: "adapter",
         capabilities: { layer: "L4", provides: ["cap_read"] },
@@ -119,10 +123,10 @@ describe("P-1 plugin manifest: D1.4-1 能力必须可兑现", () => {
 
   it("requires the carrier block of a declared kind (structural honesty)", () => {
     expect(() =>
-      pluginManifestSchema.parse({ ...validManifest(), mcp: undefined })
+      legacyPluginManifestSchema.parse({ ...validManifest(), mcp: undefined })
     ).toThrow("requires the mcp block");
     expect(() =>
-      pluginManifestSchema.parse({ ...skillManifest(), skill: undefined })
+      legacyPluginManifestSchema.parse({ ...skillManifest(), skill: undefined })
     ).toThrow("requires the skill block");
   });
 });
@@ -130,7 +134,7 @@ describe("P-1 plugin manifest: D1.4-1 能力必须可兑现", () => {
 describe("P-1 plugin manifest: D1.4-2 副作用禁用 in-process", () => {
   it("rejects side effects under in-process isolation", () => {
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         permissions: { ...validManifest().permissions, sideEffects: ["network"] }
       })
@@ -138,7 +142,7 @@ describe("P-1 plugin manifest: D1.4-2 副作用禁用 in-process", () => {
   });
 
   it("accepts side effects once isolation leaves the host process", () => {
-    const manifest = pluginManifestSchema.parse({
+    const manifest = legacyPluginManifestSchema.parse({
       ...validManifest(),
       permissions: { ...validManifest().permissions, sideEffects: ["network", "filesystem"] },
       sandbox: {
@@ -152,10 +156,10 @@ describe("P-1 plugin manifest: D1.4-2 副作用禁用 in-process", () => {
 
   it("keeps side-effect-free plugins loadable in-process and enforces min(1)", () => {
     expect(
-      pluginManifestSchema.parse(validManifest()).sandbox.isolation
+      legacyPluginManifestSchema.parse(validManifest()).sandbox.isolation
     ).toBe("in-process");
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         permissions: { ...validManifest().permissions, sideEffects: [] }
       })
@@ -166,32 +170,32 @@ describe("P-1 plugin manifest: D1.4-2 副作用禁用 in-process", () => {
 describe("P-1 plugin manifest: version/requires 真 semver 校验", () => {
   it("rejects non-SemVer versions", () => {
     expect(() =>
-      pluginManifestSchema.parse({ ...validManifest(), version: "1.2" })
+      legacyPluginManifestSchema.parse({ ...validManifest(), version: "1.2" })
     ).toThrow("Invalid SemVer");
     expect(() =>
-      pluginManifestSchema.parse({ ...validManifest(), version: "not-a-version" })
+      legacyPluginManifestSchema.parse({ ...validManifest(), version: "not-a-version" })
     ).toThrow("Invalid SemVer");
   });
 
   it("rejects unparseable or missing hostApi ranges", () => {
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         requires: { hostApi: "not-a-range" }
       })
     ).toThrow("Invalid semver range");
-    expect(() => pluginManifestSchema.parse({ ...validManifest(), requires: {} })).toThrow();
+    expect(() => legacyPluginManifestSchema.parse({ ...validManifest(), requires: {} })).toThrow();
   });
 
   it("rejects unparseable requires.plugins ranges but keeps the empty default", () => {
     expect(() =>
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         requires: { hostApi: "^1.0.0", plugins: { "@lab/core": "not-a-range" } }
       })
     ).toThrow("Invalid semver range");
     expect(
-      pluginManifestSchema.parse({
+      legacyPluginManifestSchema.parse({
         ...validManifest(),
         requires: { hostApi: "^1.0.0", plugins: { "@lab/core": "^2.0.0" } }
       }).requires.plugins
