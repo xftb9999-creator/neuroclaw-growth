@@ -28,6 +28,9 @@
  *   3 个 E3 岗位契约零新写直迁、5 个设计岗 E1 草案复核后定稿；无来源的键位缺省（见留证）。
  * - 裁点⑤ 本批切片（2026-09-27）：5 设计岗 persona 草案 v1（`persona-drafts.v1.json` + 指纹，§9）；
  *   3 个 E3 直迁岗 persona 以 templates 原文为唯一真源，不在本包复制（迁移落库属 AW-5 接线）。
+ * - AW-0 本批切片（2026-09-27）：§10 GoalSpec / PlanSpec / TaskNode / TaskEdge 契约
+ *   （`.strict()`；图硬校验经 TaskNode→WorkflowNode 投影复用 shared `validateWorkflowGraph`；
+ *   能力覆盖校验 / BLOCKED 员工引用校验〔F5 前半〕属后续批）。
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -38,13 +41,18 @@ import {
   templateInputContractSchema,
   templateOutputContractSchema,
   universalIdSchema,
+  utcTimestampSchema,
   validateTemplateInputContract,
+  validateWorkflowGraph,
+  workflowEdgeSchema,
   type EvidenceLevel,
   type TemplateContractField,
   type TemplateInputContract,
   type TemplateOutputContract,
   type TemplateInputPayload,
-  type TemplateOutputPayload
+  type TemplateOutputPayload,
+  type WorkflowDefinition,
+  type WorkflowEdge
 } from "@neuroclaw/shared";
 import capabilityInventoryV1Json from "./capability-inventory.v1.json" with { type: "json" };
 import agentProfilesV1Json from "./profiles.v1.json" with { type: "json" };
@@ -657,4 +665,448 @@ export function agentPersonaDraftsFingerprint(
   return createHash("sha256")
     .update(canonicalJson(agentPersonaDraftsSchema.parse(document)))
     .digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// §10 AW-0：目标 / 计划契约（GoalSpec / PlanSpec / TaskNode / TaskEdge）
+// ---------------------------------------------------------------------------
+
+/**
+ * AW-0 规格来源（E1 设计）：
+ * - `agent-workforce.md` §2.2（:129-193 GoalSpec 草案）、§2.3（:197-256 PlanSpec /
+ *   TaskNode / TaskEdge 草案 + 8 条结构性硬约束）、§2.5 复用表（:375-390）、
+ *   §4.2 AW-0 判据（:636）。
+ * 复用口径（零方言）：
+ * - TaskEdge = shared `workflowEdgeSchema`（universal-contracts.ts:247-255）直接复用（同构）；
+ * - TaskNode 字段超集：capabilityRefs / riskClass / timeoutMs / approvalPoint 与
+ *   `workflowNodeSchema`（:230-244）同口径；
+ * - 图硬校验（无环 / 引用存在 / 审批一致性 / 审批策略非空）调用 shared
+ *   `validateWorkflowGraph`（:2685-2756），不重写 Kahn。
+ * 本批边界（零接线）：
+ * - 能力覆盖校验（capabilityRefs 全部 COVERED；BLOCKED 员工不可被引用）＝F5 前半，属后续批；
+ * - 纯图校验内核抽取（设计 :717 缓解项）需修改 shared，超本批 write scope，暂以
+ *   TaskNode→WorkflowNode 投影方式复用（校验语义不变），留待独立批；
+ * - 无数据文件：契约冻结批无实例数据，GoalSpec / PlanSpec 实例由 AW-2 规划器产生。
+ */
+
+/** 风险档：与 shared `workflowNodeSchema.riskClass` / `workItemSchema` 同词汇（:237）。 */
+export const agentRiskClassSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
+export type AgentRiskClass = z.infer<typeof agentRiskClassSchema>;
+
+/** 成本单位：GoalSpec.constraints.budget.unit 与 PlanSpec.estimatedCost.unit 共用（:161/:221）。 */
+export const agentCostUnitSchema = z.enum(["run", "token", "usd"]);
+export type AgentCostUnit = z.infer<typeof agentCostUnitSchema>;
+
+/** 能力层分层键 L0–L8（:178/:216；plugin-roadmap §一）。 */
+export const agentCapabilityLayerSchema = z.enum([
+  "L0",
+  "L1",
+  "L2",
+  "L3",
+  "L4",
+  "L5",
+  "L6",
+  "L7",
+  "L8"
+]);
+export type AgentCapabilityLayer = z.infer<typeof agentCapabilityLayerSchema>;
+
+/**
+ * 目标作用域（:139）：组织 / 工作区 / 项目三者必填（禁止跨域推断）。
+ * 单对象层强校验三者存在；跨对象链一致性走 shared `assertScopeConsistency`
+ * （universal-contracts.ts:1802）——为执行/接线层调用，本包不重复实现。
+ */
+export const goalScopeSchema = z
+  .object({
+    organizationId: universalIdSchema,
+    workspaceId: universalIdSchema,
+    projectId: universalIdSchema
+  })
+  .strict();
+export type GoalScope = z.infer<typeof goalScopeSchema>;
+
+/**
+ * 成功判据（:148-157）。E2 解读（来源 :463 goal_officer 验收 ③「每条判据带
+ * `metricDefinitionRef` 或显式 `UNVERIFIED`」）：无 `metricDefinitionRef` 时
+ * `verifiability` 必须显式为 `UNVERIFIED`；`metricDefinitionRef` 的注册表解析
+ * （metricDefinitions 不存在）属执行层。
+ */
+export const goalSuccessCriterionSchema = z
+  .object({
+    criterionId: universalIdSchema,
+    key: z.string().min(1),
+    target: z.union([z.string(), z.number()]),
+    unit: z.string().min(1),
+    metricDefinitionRef: universalIdSchema.optional(),
+    evidenceLevelRequired: acceptanceEvidenceLevelSchema,
+    verifiability: z.enum(["MEASURABLE", "UNVERIFIED"])
+  })
+  .strict()
+  .superRefine((criterion, ctx) => {
+    if (criterion.verifiability !== "UNVERIFIED" && !criterion.metricDefinitionRef) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["metricDefinitionRef"],
+        message: "MEASURABLE 判据必须带 metricDefinitionRef（或显式标 UNVERIFIED）"
+      });
+    }
+  });
+export type GoalSuccessCriterion = z.infer<typeof goalSuccessCriterionSchema>;
+
+/** 预算（:161）：`limit > 0`（:262 Step 1），`windowDays` 正整数。 */
+export const goalBudgetSchema = z
+  .object({
+    unit: agentCostUnitSchema,
+    limit: z.number().positive(),
+    windowDays: z.number().int().positive()
+  })
+  .strict();
+export type GoalBudget = z.infer<typeof goalBudgetSchema>;
+
+/** 硬约束（:160-166）：规划器必须遵守且不得放宽。 */
+export const goalConstraintsSchema = z
+  .object({
+    budget: goalBudgetSchema,
+    timeWindow: z
+      .object({
+        notBefore: utcTimestampSchema.optional(),
+        deadline: utcTimestampSchema.optional()
+      })
+      .strict(),
+    maxTasks: z.number().int().positive(),
+    maxAgents: z.number().int().positive(),
+    maxRiskClass: agentRiskClassSchema
+  })
+  .strict();
+export type GoalConstraints = z.infer<typeof goalConstraintsSchema>;
+
+/**
+ * 合规边界（:168-174）。`stopLineHits` 非空是**合法输入**（规划侧转 tier C /
+ * BLOCKED，:191），schema 不拒——停止线的 fail-closed 语义在执行/规划层。
+ */
+export const goalComplianceSchema = z
+  .object({
+    regimes: z.array(z.string().min(1)),
+    dataResidency: z.string().min(1).optional(),
+    platformTosRefs: z.array(z.string().min(1)),
+    stopLineHits: z.array(z.string().min(1))
+  })
+  .strict();
+export type GoalCompliance = z.infer<typeof goalComplianceSchema>;
+
+/** 渠道资源面（:177）。 */
+export const goalChannelSchema = z
+  .object({
+    channelKey: z.string().min(1),
+    accountStatus: z.enum(["NONE", "PENDING", "READY"])
+  })
+  .strict();
+export type GoalChannel = z.infer<typeof goalChannelSchema>;
+
+/**
+ * GoalSpec（:134-187）：运行时目标契约；`objectiveRef?` 指向已存在 Objective
+ * （universal-contracts.ts:120-136），不复制其字段语义。
+ * `goalVersion` 为 semver 草案口径；shared 无「纯 semver 版本」校验器（仅有
+ * semverRangeSchema 范围语义），维持 `z.string().min(1)`（与
+ * `agentSkillBindingSchema.skillVersion` 同口径）。
+ */
+export const goalSpecSchema = z
+  .object({
+    goalId: universalIdSchema,
+    goalVersion: z.string().min(1),
+    schemaVersion: z.string().min(1),
+    scope: goalScopeSchema,
+    title: z.string().min(1),
+    objectiveKind: z.enum(["growth", "operation", "research", "review"]),
+    intent: z.string().min(1),
+    objectiveRef: universalIdSchema.optional(),
+    initiativeRefs: z.array(universalIdSchema).optional(),
+    successCriteria: z.array(goalSuccessCriterionSchema).min(1),
+    constraints: goalConstraintsSchema,
+    compliance: goalComplianceSchema,
+    channels: z.array(goalChannelSchema),
+    availableCapabilityLayers: z.array(agentCapabilityLayerSchema).optional(),
+    installedInventoryFingerprint: z.string().min(1),
+    approvalMode: z.enum(["human_in_the_loop", "human_on_the_loop"]),
+    requestedOutcome: z.enum(["draft", "delivered", "measured"]),
+    createdBy: z.string().min(1),
+    createdAt: utcTimestampSchema
+  })
+  .strict();
+export type GoalSpec = z.infer<typeof goalSpecSchema>;
+
+/**
+ * GoalSpec 内容指纹（:202 `goalFingerprint` 语义：防目标漂移）。
+ * 口径同 §6/§8/§9：canonical JSON + sha256；同输入两次调用字节一致。
+ */
+export function goalSpecFingerprint(spec: GoalSpec): string {
+  return createHash("sha256").update(canonicalJson(goalSpecSchema.parse(spec))).digest("hex");
+}
+
+/** 结构化交接输入（:235）：替代字符串拼接；基础校验见 PlanSpec 约束 8。 */
+export const taskHandoffInputSchema = z
+  .object({
+    fromTask: universalIdSchema,
+    field: z.string().min(1)
+  })
+  .strict();
+export type TaskHandoffInput = z.infer<typeof taskHandoffInputSchema>;
+
+/** 任务输出声明（:236）：`field` + 契约字段（复用 §2 `agentContractFieldSchema`，零方言）。 */
+export const taskOutputSchema = z
+  .object({
+    field: z.string().min(1),
+    contract: z.array(agentContractFieldSchema)
+  })
+  .strict();
+export type TaskOutput = z.infer<typeof taskOutputSchema>;
+
+/** 任务级验收判据（:237）。 */
+export const taskAcceptanceCriterionSchema = z
+  .object({
+    criterionId: universalIdSchema,
+    key: z.string().min(1),
+    target: z.union([z.string(), z.number()]),
+    unit: z.string().min(1),
+    evidenceLevelRequired: acceptanceEvidenceLevelSchema
+  })
+  .strict();
+export type TaskAcceptanceCriterion = z.infer<typeof taskAcceptanceCriterionSchema>;
+
+/** 重试策略（:241）：`maxAttempts` / `backoffMs` 非负整数（与 `agentEscalationSchema.maxRetries` 同口径）。 */
+export const taskRetryPolicySchema = z
+  .object({
+    maxAttempts: z.number().int().nonnegative(),
+    backoffMs: z.number().int().nonnegative().optional()
+  })
+  .strict();
+export type TaskRetryPolicy = z.infer<typeof taskRetryPolicySchema>;
+
+/** 任务种类（:231）。 */
+export const taskNodeKindSchema = z.enum([
+  "extract",
+  "generate",
+  "publish",
+  "measure",
+  "review",
+  "approve"
+]);
+export type TaskNodeKind = z.infer<typeof taskNodeKindSchema>;
+
+/** 失败策略（:242）；`halt` 不得静默降级为运行期语义（执行器责任）。 */
+export const taskFailurePolicySchema = z.enum(["explicit_failure", "degrade", "escalate"]);
+export type TaskFailurePolicy = z.infer<typeof taskFailurePolicySchema>;
+
+/**
+ * TaskNode（:229-243）：`workflowNodeSchema`（universal-contracts.ts:230-244）字段超集。
+ * 复用：capabilityRefs / riskClass / timeoutMs / approvalPoint 原样同口径；
+ * 新增：taskId / title / assignedRole / inputs / outputs / acceptanceCriteria / failurePolicy。
+ */
+export const taskNodeSchema = z
+  .object({
+    taskId: universalIdSchema,
+    kind: taskNodeKindSchema,
+    title: z.string().min(1),
+    capabilityRefs: z.array(universalIdSchema),
+    assignedRole: agentRoleKeySchema,
+    inputs: z.array(taskHandoffInputSchema),
+    outputs: z.array(taskOutputSchema),
+    acceptanceCriteria: z.array(taskAcceptanceCriterionSchema),
+    riskClass: agentRiskClassSchema,
+    timeoutMs: z.number().int().positive(),
+    approvalPoint: z.boolean(),
+    retryPolicy: taskRetryPolicySchema,
+    failurePolicy: taskFailurePolicySchema
+  })
+  .strict();
+export type TaskNode = z.infer<typeof taskNodeSchema>;
+
+/** TaskEdge（:245/:382）：与 `workflowEdgeSchema` 同构，直接复用（零方言）。 */
+export const taskEdgeSchema = workflowEdgeSchema;
+export type TaskEdge = WorkflowEdge;
+
+/** 计划引用的目标身份 + 内容指纹（:202，防目标漂移）。 */
+export const planGoalRefSchema = z
+  .object({
+    goalId: universalIdSchema,
+    goalVersion: z.string().min(1),
+    goalFingerprint: z.string().min(1)
+  })
+  .strict();
+export type PlanGoalRef = z.infer<typeof planGoalRefSchema>;
+
+/** 计划状态机（:205）：DRAFT → NEEDS_APPROVAL → APPROVED / REJECTED / BLOCKED / SUPERSEDED。 */
+export const planStatusSchema = z.enum([
+  "DRAFT",
+  "NEEDS_APPROVAL",
+  "APPROVED",
+  "REJECTED",
+  "BLOCKED",
+  "SUPERSEDED"
+]);
+export type PlanStatus = z.infer<typeof planStatusSchema>;
+
+/** 规划器种类（:204）：rules 为确定性档（同输入字节一致）。 */
+export const planPlannerKindSchema = z.enum(["rules", "llm", "hybrid"]);
+export type PlanPlannerKind = z.infer<typeof planPlannerKindSchema>;
+
+/** 可执行度档位（:214；plugin-roadmap §2.3：A 全可执行 / B 有条件 / C fail-closed）。 */
+export const planExecutabilityTierSchema = z.enum(["A", "B", "C"]);
+export type PlanExecutabilityTier = z.infer<typeof planExecutabilityTierSchema>;
+
+/** 缺口条目（:216）：缺哪层、缺什么、补什么可解锁。 */
+export const planMissingCapabilitySchema = z
+  .object({
+    reqId: universalIdSchema,
+    layer: agentCapabilityLayerSchema,
+    capabilityRef: universalIdSchema,
+    unlockHint: z.string().min(1)
+  })
+  .strict();
+export type PlanMissingCapability = z.infer<typeof planMissingCapabilitySchema>;
+
+/** 降级条目（:217）：禁止静默降级——每条须带 reason 与 precondition。 */
+export const planDegradationSchema = z
+  .object({
+    taskId: universalIdSchema,
+    reqId: universalIdSchema,
+    reason: z.string().min(1),
+    precondition: z.string().min(1)
+  })
+  .strict();
+export type PlanDegradation = z.infer<typeof planDegradationSchema>;
+
+/** 成本估算（:221）。 */
+export const planEstimatedCostSchema = z
+  .object({
+    unit: agentCostUnitSchema,
+    amount: z.number()
+  })
+  .strict();
+export type PlanEstimatedCost = z.infer<typeof planEstimatedCostSchema>;
+
+/**
+ * PlanSpec（:200-227）+ 结构性硬约束（:248-256，写入 schema，不靠人记）：
+ * 1. `tasks` 非空、`taskId` 唯一（schema + superRefine）；
+ * 2. 图无环——复用 shared `validateWorkflowGraph`（Kahn，:2685-2756）；
+ * 3. `edges[].from/to/failureRoute` 必须指向存在的 `taskId`（同上）；
+ * 4. `approvalPoints` 指向存在 `taskId`，且与 `task.approvalPoint` 一致（同上）；
+ * 5. `approvalPoints` 非空 ⇒ `approvalPolicy` 非空（同上，照搬 :2693-2695 语义）；
+ * 7. `riskClass` ≥ 所有 task 的 `riskClass` 最大值（superRefine）；
+ * 8. 交接字段存在性（基础版，superRefine）：`inputs[].fromTask` 必须存在且
+ *    `field` 在该任务 `outputs` 中声明；「上游」拓扑可达性与跨任务继承检查属后续批。
+ * 约束 6（capabilityRefs 全部 COVERED / BLOCKED 员工不可引用）＝F5 前半，属后续批。
+ */
+export const planSpecSchema = z
+  .object({
+    planId: universalIdSchema,
+    planVersion: z.string().min(1),
+    schemaVersion: z.string().min(1),
+    goalSpecRef: planGoalRefSchema,
+    plannerVersion: z.string().min(1),
+    plannerKind: planPlannerKindSchema,
+    status: planStatusSchema,
+    tasks: z.array(taskNodeSchema).min(1),
+    edges: z.array(taskEdgeSchema),
+    approvalPoints: z.array(universalIdSchema),
+    /** G1 不可关闭为执行层语义；结构层照搬 shared 口径（record + 非空检查）。 */
+    approvalPolicy: z.record(z.string(), z.unknown()).default({}),
+    inventoryFingerprint: z.string().min(1),
+    executabilityTier: planExecutabilityTierSchema,
+    executabilityReportRef: z.string().min(1),
+    missingCapabilities: z.array(planMissingCapabilitySchema),
+    degradations: z.array(planDegradationSchema),
+    riskClass: agentRiskClassSchema,
+    estimatedCost: planEstimatedCostSchema,
+    estimatedDurationSec: z.number().int().nonnegative().optional(),
+    approvedBy: z.string().min(1).optional(),
+    approvedAt: utcTimestampSchema.optional(),
+    planFingerprint: z.string().min(1)
+  })
+  .strict()
+  .superRefine((plan, ctx) => {
+    // 约束 1：taskId 唯一（图校验亦查 nodeId 唯一，这里给出更直白的字段定位）。
+    const taskIds = new Set<string>();
+    plan.tasks.forEach((task, index) => {
+      if (taskIds.has(task.taskId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["tasks", index, "taskId"],
+          message: `重复 taskId: ${task.taskId}`
+        });
+      }
+      taskIds.add(task.taskId);
+    });
+
+    // 约束 7：计划风险档取全任务最大值下界。
+    const riskRank: Record<AgentRiskClass, number> = { LOW: 0, MEDIUM: 1, HIGH: 2 };
+    const maxTaskRiskRank = plan.tasks.reduce(
+      (acc, task) => Math.max(acc, riskRank[task.riskClass]),
+      0
+    );
+    if (riskRank[plan.riskClass] < maxTaskRiskRank) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["riskClass"],
+        message: `plan.riskClass (${plan.riskClass}) 低于任务最大风险档`
+      });
+    }
+
+    // 约束 8（基础版）：交接输入必须指向存在的任务，且字段在该任务 outputs 中声明。
+    const taskById = new Map(plan.tasks.map((task) => [task.taskId, task]));
+    plan.tasks.forEach((task, taskIndex) => {
+      task.inputs.forEach((input, inputIndex) => {
+        const source = taskById.get(input.fromTask);
+        if (!source) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["tasks", taskIndex, "inputs", inputIndex, "fromTask"],
+            message: `inputs.fromTask 引用不存在的 taskId: ${input.fromTask}`
+          });
+          return;
+        }
+        if (!source.outputs.some((output) => output.field === input.field)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["tasks", taskIndex, "inputs", inputIndex, "field"],
+            message: `交接字段 ${input.field} 未在上游 ${source.taskId} outputs 中声明`
+          });
+        }
+      });
+    });
+
+    // 约束 2/3/4/5：投影 TaskNode → workflowNodeSchema 允许字段后复用 shared 图校验
+    //（纯图校验内核抽取需动 shared，超本批 write scope；投影不改变校验语义）。
+    try {
+      validateWorkflowGraph({
+        nodes: plan.tasks.map((task) => ({
+          nodeId: task.taskId,
+          kind: task.kind,
+          capabilityRefs: task.capabilityRefs,
+          riskClass: task.riskClass,
+          timeoutMs: task.timeoutMs,
+          approvalPoint: task.approvalPoint
+        })),
+        edges: plan.edges,
+        approvalPoints: plan.approvalPoints,
+        approvalPolicy: plan.approvalPolicy
+      } as unknown as WorkflowDefinition);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["edges"],
+        message: error instanceof Error ? error.message : "Invalid TaskDAG"
+      });
+    }
+  });
+export type PlanSpec = z.infer<typeof planSpecSchema>;
+
+/**
+ * PlanSpec 内容指纹（:226 `planFingerprint` 语义：批准内容的指纹，防批准后被篡改）。
+ * 口径同 §6/§8/§9（canonical JSON + sha256），但**排除 `planFingerprint` 字段本身**
+ * （防自引用）；校验式：`planSpecFingerprint(plan) === plan.planFingerprint`。
+ */
+export function planSpecFingerprint(plan: PlanSpec): string {
+  const { planFingerprint: _embedded, ...content } = planSpecSchema.parse(plan);
+  return createHash("sha256").update(canonicalJson(content)).digest("hex");
 }
