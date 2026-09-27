@@ -835,6 +835,29 @@ export const MIGRATIONS: Migration[] = [
     // The table is isolated from existing data, so local rollback is safe and
     // re-running 0012 recreates the same contract via IF NOT EXISTS.
     rollbackStatements: [`DROP TABLE IF EXISTS outbox_delivery_attempts`]
+  },
+  {
+    // I-042 D1: the DurableJobQueue lifecycle checkpoints previously lived
+    // only in process memory and were lost on restart. This append-only table
+    // is their durable home: one row per (run, lifecycle stage) observation,
+    // never rewritten. Deliberately no unique (run_id, stage) pair — the same
+    // stage may legitimately recur (retries), so the stream is a log, not a
+    // state machine. Reader ordering is (created_at, id).
+    id: "0013_run_lifecycle_checkpoints",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS run_lifecycle_checkpoints (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        stage TEXT NOT NULL
+          CHECK (stage IN ('queued', 'runtime', 'waiting_approval', 'completed', 'failed')),
+        created_at TIMESTAMPTZ NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_run_lifecycle_checkpoints_run_created
+         ON run_lifecycle_checkpoints(run_id, created_at)`
+    ],
+    // The table is isolated from existing analytics data, so local rollback is
+    // safe and re-running 0013 recreates the same contract via IF NOT EXISTS.
+    rollbackStatements: [`DROP TABLE IF EXISTS run_lifecycle_checkpoints`]
   }
 ];
 

@@ -22,6 +22,7 @@ export {
   auditEvents,
   jobs,
   jobAttempts,
+  runLifecycleCheckpoints,
   agents,
   artifacts,
   knowledgeEntries,
@@ -59,6 +60,13 @@ export {
   MIGRATIONS,
   type Migration
 } from "./migrations.js";
+export {
+  persistCheckpoint,
+  loadCheckpoints,
+  LIFECYCLE_CHECKPOINT_STAGES,
+  type LifecycleCheckpointStage,
+  type PersistedLifecycleCheckpoint
+} from "./checkpoints.js";
 export { schema };
 
 export interface CreateDbOptions {

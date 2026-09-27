@@ -9,7 +9,15 @@ import {
 } from "@neuroclaw/shared";
 import { eq, and, lte, asc, sql } from "drizzle-orm";
 
-import { type Database, jobs, jobAttempts, knowledgeEntries } from "@neuroclaw/db";
+import {
+  type Database,
+  type PersistedLifecycleCheckpoint,
+  jobs,
+  jobAttempts,
+  knowledgeEntries,
+  loadCheckpoints,
+  persistCheckpoint
+} from "@neuroclaw/db";
 import { embedText } from "@neuroclaw/agent-core";
 import type { AiUsageSample } from "@neuroclaw/agent-core";
 
@@ -35,11 +43,12 @@ export type JobStatus =
   | "failed"
   | "retry_scheduled";
 
-export interface LifecycleCheckpoint {
-  runId: string;
-  stage: "queued" | "runtime" | "waiting_approval" | "completed" | "failed";
-  createdAt: string;
-}
+/**
+ * I-042 D1: the checkpoint projection is now owned by @neuroclaw/db (its
+ * durable home is `run_lifecycle_checkpoints`, migration 0013); the worker
+ * keeps the same public type surface for existing consumers.
+ */
+export type LifecycleCheckpoint = PersistedLifecycleCheckpoint;
 
 export interface EnqueueOptions {
   maxAttempts?: number;
@@ -94,7 +103,7 @@ export class DurableJobQueue {
         updatedAt: now
       });
 
-      this.recordCheckpoint(run.id, "queued");
+      await this.recordCheckpoint(run.id, "queued");
       this.traceLog.record({
         scope: "durable-job-queue",
         action: "enqueue",
@@ -242,7 +251,7 @@ export class DurableJobQueue {
         })
         .where(eq(jobs.id, claimed.jobId));
 
-      this.recordCheckpoint(
+      await this.recordCheckpoint(
         result.run.id,
         result.run.status === "waiting_approval"
           ? "waiting_approval"
@@ -332,7 +341,7 @@ export class DurableJobQueue {
         })
         .where(eq(jobs.id, claimed.jobId));
 
-      this.recordCheckpoint(claimed.runId, "failed");
+      await this.recordCheckpoint(claimed.runId, "failed");
 
       this.traceLog.record({
         scope: "durable-job-queue",
@@ -383,7 +392,7 @@ export class DurableJobQueue {
       embedded = true;
     }
 
-    this.recordCheckpoint(run.id, embedded ? "completed" : "runtime");
+    await this.recordCheckpoint(run.id, embedded ? "completed" : "runtime");
 
     this.traceLog.record({
       scope: "durable-job-queue",
@@ -472,6 +481,15 @@ export class DurableJobQueue {
     return [...this.checkpoints];
   }
 
+  /**
+   * I-042 D1: read the durable checkpoint stream for a run. Unlike
+   * `listCheckpoints`, this survives a fresh store instance over the same
+   * database — the read path the D2 resume semantics will build on.
+   */
+  async listPersistedCheckpoints(runId: string): Promise<LifecycleCheckpoint[]> {
+    return loadCheckpoints(this.db, runId);
+  }
+
   private async incrementAttemptCount(jobId: string, now: string): Promise<number> {
     const current = await this.db
       .select({ attemptCount: jobs.attemptCount })
@@ -489,12 +507,37 @@ export class DurableJobQueue {
     return newCount;
   }
 
-  private recordCheckpoint(runId: string, stage: LifecycleCheckpoint["stage"]): void {
-    this.checkpoints.push({
+  /**
+   * I-042 D1: record a lifecycle checkpoint in memory (unchanged contract)
+   * and mirror it to `run_lifecycle_checkpoints`. Persistence is best-effort:
+   * the jobs table stays the authoritative job state, so a checkpoint write
+   * failure is traced, not rethrown — it must never turn a successful job
+   * into a retry.
+   */
+  private async recordCheckpoint(
+    runId: string,
+    stage: LifecycleCheckpoint["stage"]
+  ): Promise<void> {
+    const checkpoint: LifecycleCheckpoint = {
       runId,
       stage,
       createdAt: new Date().toISOString()
-    });
+    };
+    this.checkpoints.push(checkpoint);
+
+    try {
+      await persistCheckpoint(this.db, checkpoint);
+    } catch (error) {
+      this.traceLog.record({
+        scope: "durable-job-queue",
+        action: "checkpoint_persist_error",
+        metadata: {
+          runId,
+          stage,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
   }
 }
 

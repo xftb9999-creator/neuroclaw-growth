@@ -22,8 +22,8 @@
 // `resolveOutboxDispatchConfig`.
 //
 // Wiring status: the control-plane "enqueue in the same transaction as the
-// runs projection" step (§2.5, second half) is NOT wired yet — keep the
-// switch off until it lands.
+// runs projection" step (§2.5, second half) is wired (same-tx enqueue in
+// control-plane, 34eaa17) — keep the switch off until dispatch is authorized.
 // ---------------------------------------------------------------------------
 
 import {

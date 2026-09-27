@@ -293,6 +293,23 @@ export const jobAttempts = pgTable("job_attempts", {
   completedAt: text("completed_at")
 });
 
+// I-042 D1: durable mirror of the DurableJobQueue lifecycle checkpoints.
+// Append-only; the same (run_id, stage) may recur across retries, so only a
+// surrogate id is unique. Physical created_at is TIMESTAMPTZ (see the
+// timestamp mapping note above); the app contract stays ISO-8601 UTC strings.
+export const runLifecycleCheckpoints = pgTable(
+  "run_lifecycle_checkpoints",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    stage: text("stage").notNull(), // 'queued' | 'runtime' | 'waiting_approval' | 'completed' | 'failed'
+    createdAt: text("created_at").notNull()
+  },
+  (table) => [
+    index("idx_run_lifecycle_checkpoints_run_created").on(table.runId, table.createdAt)
+  ]
+);
+
 // ---------------------------------------------------------------------------
 // Custom agents — data-driven agent definitions (J2)
 // ---------------------------------------------------------------------------

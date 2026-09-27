@@ -508,6 +508,7 @@ describe("AC-3-0 local Pack / Adapter registry", () => {
   it("keeps the AC-3 migration repeatable and locally reversible", async () => {
     const { db } = await setup();
     expect(await runMigrations(db)).toEqual([]);
+    expect(await rollbackMigration(db, "0013_run_lifecycle_checkpoints")).toBe(true);
     expect(await rollbackMigration(db, "0012_outbox_delivery_attempts")).toBe(true);
     expect(await rollbackMigration(db, "0011_run_events")).toBe(true);
     expect(await rollbackMigration(db, "0010_ac6_attempt_replay_audit")).toBe(true);
@@ -518,7 +519,8 @@ describe("AC-3-0 local Pack / Adapter registry", () => {
       "0009_growth_work_items",
       "0010_ac6_attempt_replay_audit",
       "0011_run_events",
-      "0012_outbox_delivery_attempts"
+      "0012_outbox_delivery_attempts",
+      "0013_run_lifecycle_checkpoints"
     ]);
     expect(await runMigrations(db)).toEqual([]);
   });
