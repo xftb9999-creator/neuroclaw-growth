@@ -21,8 +21,9 @@
  *   扫描/校验/注册即执行——避免「死开关」。
  *
  * 范围边界：P2-1 只做「装载 + enabled 状态机 + registry.list()」；P2-2 增补能力
- * 句柄与调用边界强制。插件级审计属 P2-3；五类恶意用例套件属 P2-4；同进程无真沙箱
- * （残余风险，范围锁第一方，见 plugin-roadmap §5.1）。
+ * 句柄与调用边界强制；P2-3 增补插件级审计 sink 接缝（装载/启用/禁用/越权拒绝/回滚
+ * 事件；落盘接线在 app.ts 挂载点，见 ./plugin-audit.ts 头注）。五类恶意用例套件属
+ * P2-4；同进程无真沙箱（残余风险，范围锁第一方，见 plugin-roadmap §5.1）。
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -46,6 +47,11 @@ import {
   type PluginCapabilityHandle,
   type PluginCapabilityPolicy
 } from "./capability-handle.js";
+import {
+  emitPluginAudit,
+  type PluginAuditEvent,
+  type PluginAuditSink
+} from "./plugin-audit.js";
 
 /** 扫描目标文件名后缀：与 P-0 规划的 `*.integration.json` 目录共存而互不误读。 */
 export const PLUGIN_MANIFEST_FILE_SUFFIX = ".plugin.json";
@@ -108,7 +114,7 @@ export interface PluginHostInitReport {
 
 export interface PluginHostLogEvent {
   level: "info" | "warn";
-  event: "init" | "registered" | "rejected" | "enabled" | "disabled" | "skip";
+  event: "init" | "registered" | "rejected" | "enabled" | "disabled" | "skip" | "audit";
   message: string;
   pluginKey?: string;
   detail?: Record<string, unknown>;
@@ -151,6 +157,11 @@ export interface PluginHostOptions {
   authorizeControlledWrite?: ControlledWriteAuthorizationResolver;
   /** 授权链求值接缝（测试注入用；生产默认 shared `assertControlledWriteAuthorized`）。 */
   assertControlledWrite?: ControlledWriteGate;
+  /**
+   * P2-3 审计落盘接缝：装载/启用/禁用/越权拒绝/回滚事件经此下沉（缺省＝不落审计）。
+   * 生产接线＝app.ts 唯一挂载点注入 `createPluginAuditSink`（现有 `audit_events` 通道）。
+   */
+  auditSink?: PluginAuditSink;
   importer?: PluginImporter;
   verifyManifest?: PluginManifestVerifier;
   logger?: (event: PluginHostLogEvent) => void;
@@ -220,6 +231,7 @@ export class PluginHost {
   private readonly capabilityPolicy: PluginCapabilityPolicy | undefined;
   private readonly authorizeControlledWrite: ControlledWriteAuthorizationResolver | undefined;
   private readonly assertControlledWrite: ControlledWriteGate | undefined;
+  private readonly auditSink: PluginAuditSink | undefined;
   private readonly importer: PluginImporter;
   private readonly verifyManifest: PluginManifestVerifier;
   private readonly logger: (event: PluginHostLogEvent) => void;
@@ -239,6 +251,7 @@ export class PluginHost {
     this.capabilityPolicy = options.capabilityPolicy;
     this.authorizeControlledWrite = options.authorizeControlledWrite;
     this.assertControlledWrite = options.assertControlledWrite;
+    this.auditSink = options.auditSink;
     this.importer = options.importer ?? ((specifier) => import(specifier));
     this.verifyManifest = options.verifyManifest ?? assertHostApiCompatible;
     this.logger = options.logger ?? defaultLogger;
@@ -303,6 +316,14 @@ export class PluginHost {
         pluginKey,
         message: `activation refused before import: ${entry.error}`
       });
+      // P2-3 审计：越权/兼容拒绝事件（import 从未发生）。
+      this.audit({
+        eventType: "plugin.denied",
+        pluginKey,
+        pluginVersion: entry.manifest.pluginVersion,
+        code: error instanceof PluginCompatibilityError ? error.code : "PLUGIN_COMPATIBILITY_UNKNOWN",
+        detail: { stage: "host-api-gate", message: entry.error, importAttempted: false }
+      });
       throw error;
     }
 
@@ -322,6 +343,14 @@ export class PluginHost {
         pluginKey,
         message: `activation refused before import (capability gate): ${entry.error}`
       });
+      // P2-3 审计：能力授予门拒绝事件（声明 ∩ 强制 = ∅；import 从未发生）。
+      this.audit({
+        eventType: "plugin.denied",
+        pluginKey,
+        pluginVersion: manifest.pluginVersion,
+        code: error instanceof PluginCapabilityError ? error.code : "CAPABILITY_GRANT_UNKNOWN",
+        detail: { stage: "capability-gate", message: entry.error, importAttempted: false }
+      });
       throw error;
     }
 
@@ -335,6 +364,14 @@ export class PluginHost {
       } catch (error) {
         entry.state = "failed";
         entry.error = errorMessage(error);
+        // P2-3 审计：激活回滚事件（import 失败；代码求值中止，无 enabled 残留）。
+        this.audit({
+          eventType: "plugin.rolled_back",
+          pluginKey,
+          pluginVersion: manifest.pluginVersion,
+          code: "PLUGIN_ACTIVATION_FAILED",
+          detail: { stage: "import", message: entry.error }
+        });
         throw new PluginHostError(
           "PLUGIN_ACTIVATION_FAILED",
           `import failed for ${manifestTuple(manifest)}: ${entry.error}`
@@ -349,7 +386,9 @@ export class PluginHost {
       manifest,
       policy: this.capabilityPolicy,
       authorizeControlledWrite: this.authorizeControlledWrite,
-      assertControlledWrite: this.assertControlledWrite
+      assertControlledWrite: this.assertControlledWrite,
+      auditSink: this.auditSink,
+      onAuditError: (message) => this.reportAuditFailure(pluginKey, message)
     });
     this.capabilityHandles.set(pluginKey, capabilities);
     try {
@@ -357,6 +396,13 @@ export class PluginHost {
         entry.state = "loaded";
         entry.loadedAt = this.now().toISOString();
         await this.callHook(module, "onLoad", manifest, capabilities);
+        // P2-3 审计：装载（import + onLoad 完成）。
+        this.audit({
+          eventType: "plugin.loaded",
+          pluginKey,
+          pluginVersion: manifest.pluginVersion,
+          detail: { entryPoint: manifest.entryPoint }
+        });
       }
       await this.callHook(module, "onEnable", manifest, capabilities);
     } catch (error) {
@@ -365,6 +411,14 @@ export class PluginHost {
       entry.error = errorMessage(error);
       capabilities.revoke();
       this.capabilityHandles.delete(pluginKey);
+      // P2-3 审计：激活回滚事件（钩子失败；能力句柄已撤销，无 enabled 残留）。
+      this.audit({
+        eventType: "plugin.rolled_back",
+        pluginKey,
+        pluginVersion: manifest.pluginVersion,
+        code: "PLUGIN_ACTIVATION_FAILED",
+        detail: { stage: "hooks", message: entry.error, capabilityHandleRevoked: true }
+      });
       throw new PluginHostError(
         "PLUGIN_ACTIVATION_FAILED",
         `lifecycle hook failed for ${manifestTuple(manifest)}: ${entry.error}`
@@ -372,6 +426,13 @@ export class PluginHost {
     }
     entry.enabled = true;
     entry.state = "enabled";
+    // P2-3 审计：启用事件。
+    this.audit({
+      eventType: "plugin.enabled",
+      pluginKey,
+      pluginVersion: manifest.pluginVersion,
+      detail: { hostApiVersion: this.hostApiVersion }
+    });
     this.logger({
       level: "info",
       event: "enabled",
@@ -392,15 +453,17 @@ export class PluginHost {
     }
     const module = this.modules.get(pluginKey);
     const capabilities = this.capabilityHandles.get(pluginKey);
+    let onDisableError: string | null = null;
     if (module && entry.manifest && capabilities) {
       try {
         await this.callHook(module, "onDisable", entry.manifest, capabilities);
       } catch (error) {
+        onDisableError = errorMessage(error);
         this.logger({
           level: "warn",
           event: "disabled",
           pluginKey,
-          message: `onDisable hook failed (disable continues): ${errorMessage(error)}`
+          message: `onDisable hook failed (disable continues): ${onDisableError}`
         });
       }
     }
@@ -409,6 +472,16 @@ export class PluginHost {
     this.capabilityHandles.delete(pluginKey);
     entry.enabled = false;
     entry.state = "disabled";
+    // P2-3 审计：禁用事件（句柄已撤销）。
+    this.audit({
+      eventType: "plugin.disabled",
+      pluginKey,
+      pluginVersion: entry.manifest?.pluginVersion ?? null,
+      detail: {
+        capabilityHandleRevoked: Boolean(capabilities),
+        ...(onDisableError ? { onDisableError } : {})
+      }
+    });
     this.logger({ level: "info", event: "disabled", pluginKey, message: "disabled" });
     return this.snapshot(entry);
   }
@@ -494,6 +567,20 @@ export class PluginHost {
           message: `${file}: ${rejectionFindings.map((finding) => finding.code).join(", ")} (not registered; import never attempted)`,
           detail: { file }
         });
+        // P2-3 审计：装载期拒绝事件（有身份才落；无身份保留在报告/日志中）。
+        if (pluginKey) {
+          this.audit({
+            eventType: "plugin.denied",
+            pluginKey,
+            pluginVersion: parsed.success ? parsed.data.pluginVersion : null,
+            code: rejectionFindings.map((finding) => finding.code).join(","),
+            detail: {
+              file,
+              codes: rejectionFindings.map((finding) => finding.code),
+              stage: "scan"
+            }
+          });
+        }
         continue;
       }
 
@@ -509,6 +596,13 @@ export class PluginHost {
         findings: [],
         error: null,
         manifest
+      });
+      // P2-3 审计：装载（登记）事件——默认零激活部署下仍可见，import 不发生。
+      this.audit({
+        eventType: "plugin.registered",
+        pluginKey: manifest.pluginKey,
+        pluginVersion: manifest.pluginVersion,
+        detail: { manifestPath: path.join(this.pluginsDir, file), enabled: false }
       });
       this.logger({
         level: "info",
@@ -571,6 +665,24 @@ export class PluginHost {
   // -------------------------------------------------------------------------
   // §2.2 私有工具
   // -------------------------------------------------------------------------
+
+  /** P2-3 审计发射：永不抛出；sink 故障降级为 warn 日志（生命周期不受影响）。 */
+  private audit(event: Omit<PluginAuditEvent, "occurredAt">): void {
+    emitPluginAudit(
+      this.auditSink,
+      { ...event, occurredAt: this.now().toISOString() },
+      (message) => this.reportAuditFailure(event.pluginKey, message)
+    );
+  }
+
+  private reportAuditFailure(pluginKey: string, message: string): void {
+    this.logger({
+      level: "warn",
+      event: "audit",
+      pluginKey,
+      message: `audit sink failed (lifecycle unaffected): ${message}`
+    });
+  }
 
   private async callHook(
     module: unknown,

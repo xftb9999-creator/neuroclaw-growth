@@ -6,3 +6,4 @@
  */
 export * from "./plugin-host.js";
 export * from "./capability-handle.js";
+export * from "./plugin-audit.js";

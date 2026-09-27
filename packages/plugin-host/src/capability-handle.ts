@@ -25,8 +25,9 @@
  * 5. **不发放裸访问**：插件拿不到 db/network/fs 句柄；`network`/`filesystem`
  *    仅提供显式拒绝桩（明确错误码），本阶段不发放真实网络/文件能力。
  *
- * 非目标（阶段边界）：真实 IO 代理与策略/预算/审批的存储解析（P4-1）；插件级审计
- * 打标（P2-3）；五类恶意负向套件（P2-4）；同进程无真沙箱（残余风险，roadmap §5.1）。
+ * 非目标（阶段边界）：真实 IO 代理与策略/预算/审批的存储解析（P4-1）；P2-3 的越权
+ * 拒绝审计由 `emitDenial` 接缝提供（落盘 sink 由宿主注入，见 ./plugin-audit.ts）；
+ * 五类恶意负向套件（P2-4）；同进程无真沙箱（残余风险，roadmap §5.1）。
  */
 import {
   assertControlledWriteAuthorized,
@@ -34,6 +35,8 @@ import {
 } from "@neuroclaw/shared";
 
 import type { PluginManifest } from "@neuroclaw/plugin-contract";
+
+import { emitPluginAudit, type PluginAuditSink } from "./plugin-audit.js";
 
 // ---------------------------------------------------------------------------
 // §1 宿主能力策略（宿主强制授权源；清单只能收紧）
@@ -250,6 +253,10 @@ export interface PluginCapabilityHandleOptions {
   policy?: PluginCapabilityPolicy;
   authorizeControlledWrite?: ControlledWriteAuthorizationResolver;
   assertControlledWrite?: ControlledWriteGate;
+  /** P2-3 审计落盘接缝：越权拒绝事件经此下沉（缺省＝不落审计）。 */
+  auditSink?: PluginAuditSink;
+  /** P2-3 sink 故障回调（永不阻断拒绝路径）；缺省＝静默降级。 */
+  onAuditError?: (message: string) => void;
   now?: () => Date;
 }
 
@@ -268,8 +275,29 @@ export function createPluginCapabilityHandle(
   const now = options.now ?? (() => new Date());
   let revoked = false;
 
+  /** P2-3 拒绝审计发射：在抛错前调用；sink 故障永不阻断拒绝路径。 */
+  const emitDenial = (
+    operation: string,
+    code: PluginCapabilityErrorCode,
+    detail: Record<string, unknown> = {}
+  ): void => {
+    emitPluginAudit(
+      options.auditSink,
+      {
+        eventType: "plugin.denied",
+        pluginKey: manifest.pluginKey,
+        pluginVersion: manifest.pluginVersion,
+        occurredAt: now().toISOString(),
+        code,
+        detail: { operation, ...detail }
+      },
+      options.onAuditError
+    );
+  };
+
   const ensureActive = (operation: string): void => {
     if (revoked) {
+      emitDenial(operation, "CAPABILITY_HANDLE_REVOKED");
       throw new PluginCapabilityError(
         "CAPABILITY_HANDLE_REVOKED",
         `capability handle for plugin ${manifest.pluginKey} has been revoked; ${operation} refused`,
@@ -290,6 +318,7 @@ export function createPluginCapabilityHandle(
     read(scope: string): CapabilityGrant {
       ensureActive("read");
       if (!manifest.readScopes.includes(scope)) {
+        emitDenial("read", "CAPABILITY_READ_NOT_DECLARED", { scope });
         throw new PluginCapabilityError(
           "CAPABILITY_READ_NOT_DECLARED",
           `plugin ${manifest.pluginKey} read scope ${JSON.stringify(scope)} is not declared in ` +
@@ -298,6 +327,7 @@ export function createPluginCapabilityHandle(
         );
       }
       if (!effective.readScopes.includes(scope)) {
+        emitDenial("read", "CAPABILITY_READ_NOT_GRANTED", { scope });
         throw new PluginCapabilityError(
           "CAPABILITY_READ_NOT_GRANTED",
           `plugin ${manifest.pluginKey} read scope ${JSON.stringify(scope)} is not granted by the ` +
@@ -320,6 +350,11 @@ export function createPluginCapabilityHandle(
       // 1) simulation-only 阻断：先于声明/授予检查；声明或宿主任一为 sim ⇒ 阻断
       //    （只能收紧不能放宽——即使 writeScopes 已声明且宿主已授予）。
       if (effective.simulationOnly) {
+        emitDenial("write", "CAPABILITY_SIMULATION_ONLY_BLOCKED", {
+          scope: request.scope,
+          actionRef: request.actionRef,
+          resourceRef: request.resourceRef
+        });
         throw new PluginCapabilityError(
           "CAPABILITY_SIMULATION_ONLY_BLOCKED",
           `plugin ${manifest.pluginKey} write to ${JSON.stringify(request.scope)} blocked at the call ` +
@@ -330,6 +365,7 @@ export function createPluginCapabilityHandle(
       }
       // 2) 清单声明（默认拒绝：writeScopes 空 = 无写权限）。
       if (!manifest.writeScopes.includes(request.scope)) {
+        emitDenial("write", "CAPABILITY_WRITE_NOT_DECLARED", { scope: request.scope });
         throw new PluginCapabilityError(
           "CAPABILITY_WRITE_NOT_DECLARED",
           `plugin ${manifest.pluginKey} write scope ${JSON.stringify(request.scope)} is not declared ` +
@@ -339,6 +375,7 @@ export function createPluginCapabilityHandle(
       }
       // 3) 宿主授予（求交）。
       if (!effective.writeScopes.includes(request.scope)) {
+        emitDenial("write", "CAPABILITY_WRITE_NOT_GRANTED", { scope: request.scope });
         throw new PluginCapabilityError(
           "CAPABILITY_WRITE_NOT_GRANTED",
           `plugin ${manifest.pluginKey} write scope ${JSON.stringify(request.scope)} is not granted ` +
@@ -348,6 +385,10 @@ export function createPluginCapabilityHandle(
       }
       // 4) CONTROLLED_WRITE 授权链：writeScopes 非空 ⇒ 每次写调用必过链。
       if (!authorizeControlledWrite) {
+        emitDenial("write", "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED", {
+          scope: request.scope,
+          cause: "no-resolver"
+        });
         throw new PluginCapabilityError(
           "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED",
           `plugin ${manifest.pluginKey} write to ${JSON.stringify(request.scope)} requires ` +
@@ -365,6 +406,10 @@ export function createPluginCapabilityHandle(
           resourceRef: request.resourceRef
         });
       } catch (error) {
+        emitDenial("write", "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED", {
+          scope: request.scope,
+          cause: errorMessage(error)
+        });
         throw new PluginCapabilityError(
           "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED",
           `plugin ${manifest.pluginKey} write to ${JSON.stringify(request.scope)} denied: ` +
@@ -373,6 +418,10 @@ export function createPluginCapabilityHandle(
         );
       }
       if (!evidence) {
+        emitDenial("write", "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED", {
+          scope: request.scope,
+          cause: "no-evidence"
+        });
         throw new PluginCapabilityError(
           "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED",
           `plugin ${manifest.pluginKey} write to ${JSON.stringify(request.scope)} denied: ` +
@@ -383,6 +432,10 @@ export function createPluginCapabilityHandle(
       try {
         assertControlledWrite(evidence);
       } catch (error) {
+        emitDenial("write", "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED", {
+          scope: request.scope,
+          cause: errorMessage(error)
+        });
         throw new PluginCapabilityError(
           "CAPABILITY_CONTROLLED_WRITE_NOT_AUTHORIZED",
           `plugin ${manifest.pluginKey} write to ${JSON.stringify(request.scope)} denied by the ` +
@@ -403,6 +456,7 @@ export function createPluginCapabilityHandle(
     network: {
       request(descriptor: string): never {
         ensureActive("network");
+        emitDenial("network", "CAPABILITY_NETWORK_NOT_GRANTED", { descriptor });
         throw new PluginCapabilityError(
           "CAPABILITY_NETWORK_NOT_GRANTED",
           `plugin ${manifest.pluginKey} network access is not available through the capability ` +
@@ -415,6 +469,7 @@ export function createPluginCapabilityHandle(
     filesystem: {
       access(target: string): never {
         ensureActive("filesystem");
+        emitDenial("filesystem", "CAPABILITY_FILESYSTEM_NOT_GRANTED", { target });
         throw new PluginCapabilityError(
           "CAPABILITY_FILESYSTEM_NOT_GRANTED",
           `plugin ${manifest.pluginKey} filesystem access is not available through the capability ` +

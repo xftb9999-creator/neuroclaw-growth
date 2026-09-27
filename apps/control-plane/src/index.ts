@@ -32,6 +32,7 @@ import {
   adapterRegistry,
   attempts,
   replayCheckpoints,
+  auditEvents,
   universalAuditEvents,
   metricDefinitions as metricDefinitionsTable,
   metricObservations as metricObservationsTable,
@@ -1684,6 +1685,79 @@ export interface RegistryListResponse<T> {
 export interface RegistryProjectAggregate<T> {
   projectId: string;
   packs: T[];
+}
+
+// ---------------------------------------------------------------------------
+// P2-3 · 插件审计只读检索面（audit_events 通道，resourceType='plugin'）
+// ---------------------------------------------------------------------------
+
+/** 插件审计事件检索结果（由 audit_events 行 + metadata 解析而来）。 */
+export interface PluginAuditEventRecord {
+  id: string;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  /** 契约身份字段（metadata.pluginKey，回退 resourceId）。 */
+  pluginKey: string | null;
+  /** 文档口径别名（metadata.pluginId，回退 pluginKey）。 */
+  pluginId: string | null;
+  pluginVersion: string | null;
+  code: string | null;
+  occurredAt: string;
+  detail: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+}
+
+function parseAuditMetadata(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 只读检索：按 `resourceType='plugin'` 过滤 `audit_events`，可选插件身份过滤
+ * （resourceId＝pluginKey）、按发生时间倒序。limit 默认 100，上限 500。
+ * 身份打标口径：metadata 同时含 pluginId（文档别名）与 pluginKey（契约字段）。
+ */
+export async function listPluginAuditEvents(
+  db: Database,
+  options: { pluginKey?: string; limit?: number } = {}
+): Promise<PluginAuditEventRecord[]> {
+  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 100), 1), 500);
+  const conditions = [eq(auditEvents.resourceType, "plugin")];
+  if (options.pluginKey) conditions.push(eq(auditEvents.resourceId, options.pluginKey));
+  const rows = await db
+    .select()
+    .from(auditEvents)
+    .where(and(...conditions))
+    .orderBy(desc(auditEvents.createdAt))
+    .limit(limit);
+  return rows.map((row) => {
+    const metadata = parseAuditMetadata(row.metadata);
+    const pluginKey = typeof metadata.pluginKey === "string" ? metadata.pluginKey : row.resourceId;
+    return {
+      id: row.id,
+      action: row.action,
+      resourceType: row.resourceType,
+      resourceId: row.resourceId,
+      pluginKey,
+      pluginId: typeof metadata.pluginId === "string" ? metadata.pluginId : pluginKey,
+      pluginVersion: typeof metadata.pluginVersion === "string" ? metadata.pluginVersion : null,
+      code: typeof metadata.code === "string" ? metadata.code : null,
+      occurredAt: row.createdAt,
+      detail:
+        typeof metadata.detail === "object" && metadata.detail !== null && !Array.isArray(metadata.detail)
+          ? (metadata.detail as Record<string, unknown>)
+          : null,
+      metadata
+    };
+  });
 }
 
 export class ControlPlaneService {

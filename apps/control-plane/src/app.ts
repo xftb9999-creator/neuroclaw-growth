@@ -45,6 +45,7 @@ import {
 } from "./index.js";
 import { requireAuth, requirePermission } from "./middleware/auth.js";
 import { createAuditMiddleware } from "./middleware/audit.js";
+import { createPluginAuditSink } from "./plugin-audit.js";
 import {
   OutboxDeliveryStore,
   OutboxDispatcher,
@@ -201,7 +202,12 @@ export function createApp(
   // 动态 import 仅对显式 allowlist（NEUROCLAW_PLUGIN_HOST_ENABLED，默认空）中的
   // 插件进行；首次 enabled=true 运行期装载属 G1 定点确认（p2-readiness §4）。
   // init 为 fail-safe：不合法清单不进入 registry、永不触达 import。
-  const pluginHost = bootstrapPluginHost(resolvePluginHostConfig());
+  // P2-3 · 审计接线：插件生命周期/拒绝/回滚事件经 sink 落现有 `audit_events` 通道
+  // （resourceType='plugin'；sink 故障永不反噬宿主生命周期，见 ./plugin-audit.ts）。
+  const pluginHost = bootstrapPluginHost({
+    ...resolvePluginHostConfig(),
+    auditSink: createPluginAuditSink(service.db)
+  });
   (app as AppWithPluginHost).pluginHost = pluginHost;
 
   app.use("*", logger());
