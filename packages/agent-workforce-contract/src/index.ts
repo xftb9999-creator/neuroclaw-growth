@@ -26,6 +26,8 @@
  *   上岗裁决纯函数（不进包 barrel，循 RG-2b 非 barrel 先例）；插件化（AW-6）属 P-2，不做。
  * - M1 本批切片（2026-09-27）：8 岗位 profile 终稿 v1（`profiles.v1.json` + 指纹，§8）；
  *   3 个 E3 岗位契约零新写直迁、5 个设计岗 E1 草案复核后定稿；无来源的键位缺省（见留证）。
+ * - 裁点⑤ 本批切片（2026-09-27）：5 设计岗 persona 草案 v1（`persona-drafts.v1.json` + 指纹，§9）；
+ *   3 个 E3 直迁岗 persona 以 templates 原文为唯一真源，不在本包复制（迁移落库属 AW-5 接线）。
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -46,6 +48,7 @@ import {
 } from "@neuroclaw/shared";
 import capabilityInventoryV1Json from "./capability-inventory.v1.json" with { type: "json" };
 import agentProfilesV1Json from "./profiles.v1.json" with { type: "json" };
+import agentPersonaDraftsV1Json from "./persona-drafts.v1.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
 // §1 AgentRoleKey — 8 岗位键（唯一分派 / 裁决键）
@@ -559,5 +562,99 @@ export function agentProfilesFingerprint(
 ): string {
   return createHash("sha256")
     .update(canonicalJson(agentProfilesSchema.parse(document)))
+    .digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// §9 裁点⑤：5 设计岗 persona 草案 v1（persona-drafts.v1.json）
+// ---------------------------------------------------------------------------
+
+/**
+ * 5 个设计岗固定顺序（= `AGENT_ROLE_KEYS` 去除 3 个 E3 直迁岗后的相对顺序；
+ * 来源：方案稿 §3.2、M1 留证 §三/§四）。仅这 5 岗进草案文件；
+ * 3 个 E3 直迁岗 persona 以 `templates/src/index.ts:43-44 / :73-74 / :109-110` 原文为唯一真源。
+ */
+export const AGENT_DESIGN_ROLE_KEYS = [
+  "goal_officer",
+  "strategist",
+  "channel_ops",
+  "compliance_reviewer",
+  "retro_officer"
+] as const;
+export type AgentDesignRoleKey = (typeof AGENT_DESIGN_ROLE_KEYS)[number];
+
+/**
+ * persona 草案条目：恰 2 键（`.strict()`）。
+ * `persona` 为单行文本（与 3 直迁 templates 载体同格式；不得含换行）。
+ */
+export const agentPersonaDraftSchema = z
+  .object({
+    role: agentRoleKeySchema,
+    persona: z
+      .string()
+      .min(1)
+      .refine((text) => !/[\r\n]/.test(text), {
+        message: "persona 草案须为单行文本（与 3 直迁 templates 同格式）"
+      })
+  })
+  .strict();
+export type AgentPersonaDraft = z.infer<typeof agentPersonaDraftSchema>;
+
+/**
+ * 文件形态 `{version:"1.0-draft", drafts: [{role, persona}]}`（`.strict()`）。
+ * 不变量：role 唯一且恰为 5 设计岗全量（缺一/重复/混入 3 直迁岗即拒）。
+ * 状态：**草案**——独立复核通过后方可升为 v1.0；本文件不落库、不接线（AW-5 范围）。
+ */
+export const agentPersonaDraftsSchema = z
+  .object({
+    version: z.literal("1.0-draft"),
+    drafts: z.array(agentPersonaDraftSchema).min(1)
+  })
+  .strict()
+  .superRefine((document, ctx) => {
+    const seen = new Set<string>();
+    document.drafts.forEach((draft, index) => {
+      if (seen.has(draft.role)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["drafts", index, "role"],
+          message: `重复 role: ${draft.role}`
+        });
+      }
+      seen.add(draft.role);
+    });
+    for (const role of AGENT_DESIGN_ROLE_KEYS) {
+      if (!seen.has(role)) {
+        ctx.addIssue({ code: "custom", path: ["drafts"], message: `缺少设计岗草案: ${role}` });
+      }
+    }
+    for (const role of seen) {
+      if (!(AGENT_DESIGN_ROLE_KEYS as readonly string[]).includes(role)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["drafts"],
+          message: `非设计岗不得进入草案（直迁岗保持 templates 原文）: ${role}`
+        });
+      }
+    }
+  });
+export type AgentPersonaDraftsDocument = z.infer<typeof agentPersonaDraftsSchema>;
+
+/** 5 设计岗 persona 草案 v1（静态 JSON；来源见 `.artifacts/impl/20260927-persona-drafts.md`）。 */
+export const AGENT_PERSONA_DRAFTS_V1: AgentPersonaDraftsDocument =
+  agentPersonaDraftsSchema.parse(agentPersonaDraftsV1Json);
+
+/** 事实源文件（用于指纹与快照复核）。 */
+export const AGENT_PERSONA_DRAFTS_V1_FILE = "persona-drafts.v1.json";
+
+/**
+ * persona 草案指纹：对 parse 后的文档做 canonical JSON + sha256（口径同 profiles/清单指纹）。
+ * 同输入两次调用字节一致（默认参数即 `AGENT_PERSONA_DRAFTS_V1`）。
+ */
+export function agentPersonaDraftsFingerprint(
+  document: AgentPersonaDraftsDocument = AGENT_PERSONA_DRAFTS_V1
+): string {
+  return createHash("sha256")
+    .update(canonicalJson(agentPersonaDraftsSchema.parse(document)))
     .digest("hex");
 }
