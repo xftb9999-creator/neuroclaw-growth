@@ -27,6 +27,8 @@ import { createApp } from "./app.js";
  *  ① origin = newest checkpoint by write order (seq): created_at ties and
  *    random ids no longer decide;
  *  ② repeated calls are idempotent (same jobId, exactly one resume job);
+ *    concurrent duplicates collapse too: one racer reports `enqueued`, the
+ *    loser reports `already_enqueued` (unique-index re-read path);
  *  ③ no origin → fail-closed `resume_unavailable` (no job, trace, no silent
  *    full replay); stage no-ops are not rejections;
  *  ④ resume never consumes/mutates the original job's attempts budget;
@@ -158,6 +160,24 @@ describe("② idempotent repeated resume", () => {
     expect(replayed).toBe(first.jobId);
     expect(
       (await jobRows(db, run.id)).filter((row) => row.type === "resume_from_checkpoint")
+    ).toHaveLength(1);
+
+    // D2 polish: concurrent duplicates on a fresh run. Exactly one racer wins
+    // the insert and reports `enqueued`; the loser — whether it short-circuits
+    // on the pre-check or trips the unique index and re-reads the winner —
+    // must report `already_enqueued` with the same jobId, never a phantom
+    // second enqueue.
+    const raceRun = queuedRun("run_i042d2_idem_race");
+    await queue.enqueue(raceRun);
+    const [a, b] = await Promise.all([
+      queue.resumeRunFromCheckpoint(raceRun),
+      queue.resumeRunFromCheckpoint(raceRun)
+    ]);
+    expect(a.jobId).toBeTruthy();
+    expect(b.jobId).toBe(a.jobId);
+    expect([a.status, b.status].sort()).toEqual(["already_enqueued", "enqueued"]);
+    expect(
+      (await jobRows(db, raceRun.id)).filter((row) => row.type === "resume_from_checkpoint")
     ).toHaveLength(1);
   });
 });

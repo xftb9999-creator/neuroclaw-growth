@@ -127,6 +127,21 @@ export class DurableJobQueue {
   }
 
   async enqueue(run: Run, type: JobType = "execute_run", options: EnqueueOptions = {}): Promise<string> {
+    const { jobId } = await this.enqueueInternal(run, type, options);
+    return jobId;
+  }
+
+  /**
+   * I-042 D2 polish: internal `enqueue` variant that additionally reports
+   * whether this call actually created the job (`created: true`) or reused an
+   * existing row through the idempotency key (`created: false` — pre-check hit
+   * or unique-index race loss). The public `enqueue` contract is unchanged.
+   */
+  private async enqueueInternal(
+    run: Run,
+    type: JobType,
+    options: EnqueueOptions
+  ): Promise<{ jobId: string; created: boolean }> {
     const span = this.traceLog.startSpan("durable-job-queue", "enqueue", {
       runId: run.id,
       type
@@ -138,7 +153,7 @@ export class DurableJobQueue {
       // `jobs.idempotency_key` and we re-read the winner.
       if (options.idempotencyKey) {
         const existing = await this.findJobByIdempotencyKey(options.idempotencyKey);
-        if (existing) return existing.id;
+        if (existing) return { jobId: existing.id, created: false };
       }
 
       const jobId = `job_${randomUUID()}`;
@@ -161,7 +176,7 @@ export class DurableJobQueue {
       } catch (insertError) {
         if (options.idempotencyKey) {
           const raced = await this.findJobByIdempotencyKey(options.idempotencyKey);
-          if (raced) return raced.id;
+          if (raced) return { jobId: raced.id, created: false };
         }
         throw insertError;
       }
@@ -174,7 +189,7 @@ export class DurableJobQueue {
       });
 
       span.setAttribute("jobId", jobId);
-      return jobId;
+      return { jobId, created: true };
     } catch (error) {
       span.recordError(error as Error);
       throw error;
@@ -677,10 +692,23 @@ export class DurableJobQueue {
 
       const payload: JobPayload = { resumeFromCheckpointId: origin.id };
       const digest = resumeDigest(origin.id, payload);
-      const jobId = await this.enqueue(run, "resume_from_checkpoint", {
+      const { jobId, created } = await this.enqueueInternal(run, "resume_from_checkpoint", {
         payload,
         idempotencyKey
       });
+
+      if (!created) {
+        // Lost a concurrent dedup race (unique-index re-read): collapse to the
+        // same idempotent outcome as the sequential path — never report a
+        // fresh enqueue for a reused job.
+        return {
+          status: "already_enqueued",
+          runId: run.id,
+          jobId,
+          checkpointId: origin.id,
+          stage: origin.stage
+        };
+      }
 
       this.traceLog.record({
         scope: "durable-job-queue",
