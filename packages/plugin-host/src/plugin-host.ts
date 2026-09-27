@@ -537,7 +537,15 @@ export class PluginHost {
       const parsed = pluginManifestSchema.safeParse(input);
       const pluginKey = parsed.success ? parsed.data.pluginKey : null;
       const fileFindings = setReport.findings.filter((finding) => {
-        if (finding.pluginKey) return pluginKey !== null && finding.pluginKey === pluginKey;
+        if (finding.pluginKey) {
+          if (pluginKey === null) return false;
+          if (finding.pluginKey === pluginKey) return true;
+          // P2-4（类4）：依赖环 finding 以环入口为 pluginKey；环内其余成员经
+          // detail.cycle 回指——全部成员一并拒绝。只拒入口成员会让其余成员带
+          // 悬空 requires 进入 registry（违反「缺一不装」），构成环旁路。
+          const cycle = finding.detail?.cycle;
+          return Array.isArray(cycle) && cycle.includes(pluginKey);
+        }
         const findingIndex = finding.detail?.index;
         if (typeof findingIndex === "number") return findingIndex === index;
         return true; // 全局 finding（如宿主版本非法）：挂到所有被拒项
