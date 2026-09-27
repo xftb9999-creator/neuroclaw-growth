@@ -20,6 +20,7 @@
         "assert:bundle": "node scripts/assert-web-bundle.mjs",
         "assert:release": "node scripts/verify-release-manifest.mjs",
         "gate:r1": "node scripts/gate-report.mjs",
+        "replay:gate": "node scripts/replay-gate.mjs",
         "typecheck": "tsc -b --pretty false && tsc --noEmit -p apps/web/tsconfig.json"
     },
     "devDependencies": {

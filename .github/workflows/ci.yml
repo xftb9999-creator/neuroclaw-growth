@@ -180,3 +180,36 @@ jobs:
           expect(intersects('^1.0.0', '^2.0.0') === false && intersects('^1.0.0', '^1.2.0') === true, 'intersects() semantics');
           console.log('PROD SMOKE OK - semver ' + version + ' resolved at ' + resolved);
           "
+
+  # I-012 (Liangyi closed loop): incident -> fixture -> replay gate.
+  # Re-derives every committed incident fixture from its stored run_events
+  # log alone, through the pure functions exported by @neuroclaw/shared
+  # (packages/shared/src/run-event-replay.ts). Fail-closed: any drift,
+  # unreadable fixture, or accepted tamper exits non-zero. Independent of
+  # `build` on purpose; the shared dist it imports is built in-job.
+  replay-gate:
+    name: Incident replay gate (run_events -> fixture)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      npm_config_install_strategy: hoisted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package (gate imports its compiled dist)
+        run: npx tsc -b packages/shared
+
+      - name: Incident replay gate
+        run: npm run replay:gate
