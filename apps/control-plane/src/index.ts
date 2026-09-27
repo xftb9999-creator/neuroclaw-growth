@@ -71,6 +71,10 @@ import {
   type OutboxEventStatus,
   assertOutboxEventTransition,
   outboxEventSchema,
+  OUTBOX_DELIVERY_IDEMPOTENCY_SCOPE,
+  outboxDeliveryIntentSchema,
+  outboxDeliveryPayloadSchema,
+  type OutboxDeliveryIntent,
   runtimeEventSchema,
   assertReceiptEvidenceChain,
   assertMetricDefinitionRegistryConsistency,
@@ -146,6 +150,7 @@ import {
 import { TemporalWorkerSkeleton, type JobPayload } from "@neuroclaw/temporal-worker";
 import { generateStructuredForAgent, embedText, isEmbeddingEnabled } from "@neuroclaw/agent-core";
 import { playbooks as playbooksTable } from "@neuroclaw/db";
+import { resolveOutboxDispatchConfig } from "./outbox-dispatcher.js";
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -218,6 +223,13 @@ export interface EnqueueOutboxEventResult {
   eventId: string;
   status: OutboxEventStatus;
 }
+
+/**
+ * W2 §2.5: transaction handle for the runs-projection + delivery-intent write.
+ * Derived from the Drizzle database so both writers share one type without
+ * leaking generics through method signatures.
+ */
+type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /** Wave 1 wiring: durable identity of one persisted runtime event stream. */
 export interface RunRuntimeEventWiringResult {
@@ -480,6 +492,16 @@ function canonicalJson(value: unknown): string {
 function outboxIdentitySnapshot(event: OutboxEvent): string {
   const { status: _status, ...immutable } = event;
   return canonicalJson(immutable);
+}
+
+/**
+ * W2 §2.5: the strict `outbox.delivery.v1` intent stored in an outbox event
+ * payload, when the payload is one — otherwise undefined (other event types
+ * share the same table).
+ */
+function storedDeliveryIntent(event: OutboxEvent): OutboxDeliveryIntent | undefined {
+  const parsed = outboxDeliveryPayloadSchema.safeParse(event.payload);
+  return parsed.success ? parsed.data.deliveryIntent : undefined;
 }
 
 type RunEventInsert = typeof runEvents.$inferInsert;
@@ -2072,43 +2094,184 @@ export class ControlPlaneService {
     }
     const now = new Date().toISOString();
 
-    return this.db.transaction(async (tx) => {
-      const insertedRows = await tx
-        .insert(outboxEvents)
-        .values(outboxEventToInsert(event, now))
-        .onConflictDoNothing({
-          target: [outboxEvents.idempotencyScope, outboxEvents.idempotencyKey]
-        })
-        .returning({ eventId: outboxEvents.eventId });
+    return this.db.transaction((tx) => this.persistOutboxEventInTx(tx, event, now));
+  }
 
-      const persistedRows = await tx
-        .select()
-        .from(outboxEvents)
-        .where(
-          and(
-            eq(outboxEvents.idempotencyScope, event.idempotencyScope),
-            eq(outboxEvents.idempotencyKey, event.idempotencyKey)
-          )
+  /**
+   * Shared insert/read-back body of the Outbox enqueue, callable inside a
+   * caller-owned transaction so an event can commit atomically with its source
+   * write (W2 §2.5). The database unique constraint is the authoritative
+   * duplicate guard; the identity snapshot compare rejects a key reused for a
+   * different envelope.
+   */
+  private async persistOutboxEventInTx(
+    tx: DbTransaction,
+    event: OutboxEvent,
+    now: string
+  ): Promise<EnqueueOutboxEventResult> {
+    const insertedRows = await tx
+      .insert(outboxEvents)
+      .values(outboxEventToInsert(event, now))
+      .onConflictDoNothing({
+        target: [outboxEvents.idempotencyScope, outboxEvents.idempotencyKey]
+      })
+      .returning({ eventId: outboxEvents.eventId });
+
+    const persistedRows = await tx
+      .select()
+      .from(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.idempotencyScope, event.idempotencyScope),
+          eq(outboxEvents.idempotencyKey, event.idempotencyKey)
         )
-        .limit(1);
-      const persisted = persistedRows[0];
-      if (!persisted) {
-        throw new Error("Outbox insert did not produce a readable event");
-      }
+      )
+      .limit(1);
+    const persisted = persistedRows[0];
+    if (!persisted) {
+      throw new Error("Outbox insert did not produce a readable event");
+    }
 
-      const storedEvent = rowToOutboxEvent(persisted);
-      if (outboxIdentitySnapshot(storedEvent) !== outboxIdentitySnapshot(event)) {
+    const storedEvent = rowToOutboxEvent(persisted);
+    if (outboxIdentitySnapshot(storedEvent) !== outboxIdentitySnapshot(event)) {
+      throw new IdempotencyConflictError(
+        `Idempotency key '${event.idempotencyScope}:${event.idempotencyKey}' is already bound to a different event`
+      );
+    }
+
+    return {
+      event: storedEvent,
+      inserted: insertedRows.length > 0,
+      eventId: storedEvent.eventId,
+      status: storedEvent.status
+    };
+  }
+
+  /**
+   * W2 §2.5: enqueue one adapter-produced delivery intent **inside the
+   * caller's transaction** — the same transaction that writes the `runs`
+   * projection — so a run write can never commit without its delivery intent,
+   * and a failing enqueue never leaves a half-written outcome. Use
+   * `persistRunProjection` (the only caller); there is deliberately no
+   * non-transactional overload.
+   *
+   * Identity semantics (`outbox.delivery.v1`): the intent itself is the
+   * payload identity. Re-enqueueing the same intent (a retried or resumed job
+   * re-emitting the same step outcome) returns the existing event, while the
+   * same idempotency key bound to a *different* intent is a conflict that
+   * fails the whole transaction — `enqueueOutboxEvent`'s same-key-different-
+   * payload guard at intent granularity (a retry's fresh envelope timestamps
+   * are audit metadata, not identity).
+   */
+  async enqueueDeliveryIntentInTx(
+    tx: DbTransaction,
+    input: { run: Run; intent: OutboxDeliveryIntent }
+  ): Promise<EnqueueOutboxEventResult> {
+    const intent = outboxDeliveryIntentSchema.parse(input.intent);
+    const existingRows = await tx
+      .select()
+      .from(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.idempotencyScope, OUTBOX_DELIVERY_IDEMPOTENCY_SCOPE),
+          eq(outboxEvents.idempotencyKey, intent.idempotencyKey)
+        )
+      )
+      .limit(1);
+    if (existingRows[0]) {
+      const stored = rowToOutboxEvent(existingRows[0]);
+      const storedIntent = storedDeliveryIntent(stored);
+      if (!storedIntent || canonicalJson(storedIntent) !== canonicalJson(intent)) {
         throw new IdempotencyConflictError(
-          `Idempotency key '${event.idempotencyScope}:${event.idempotencyKey}' is already bound to a different event`
+          `Idempotency key '${OUTBOX_DELIVERY_IDEMPOTENCY_SCOPE}:${intent.idempotencyKey}' is already bound to a different delivery intent`
         );
       }
+      return { event: stored, inserted: false, eventId: stored.eventId, status: stored.status };
+    }
 
-      return {
-        event: storedEvent,
-        inserted: insertedRows.length > 0,
-        eventId: storedEvent.eventId,
-        status: storedEvent.status
-      };
+    // Fresh envelope; the timestamp is canonicalized so the insert read-back
+    // snapshot compare cannot trip on the `.000Z` normalization edge.
+    const now = normalizePersistedUtcTimestamp(new Date().toISOString());
+    const event = outboxEventSchema.parse({
+      eventId: `evt_outbox_delivery_${input.run.id}_${sha256Hex(intent.idempotencyKey).slice(0, 12)}`,
+      schemaVersion: "1.0",
+      eventType: "growth.outbox.delivery_intent_recorded",
+      occurredAt: now,
+      emittedAt: now,
+      scope: { workspaceId: input.run.workspaceId },
+      actorRef: RUNTIME_EVENT_ACTOR_REF,
+      subjectRef: input.run.id,
+      correlationId: input.run.id,
+      idempotencyKey: intent.idempotencyKey,
+      idempotencyScope: OUTBOX_DELIVERY_IDEMPOTENCY_SCOPE,
+      traceId: `trace_${input.run.id}`,
+      dataClass: "OPERATIONAL",
+      payload: { deliveryIntent: intent },
+      status: "PENDING"
+    });
+    return this.persistOutboxEventInTx(tx, event, now);
+  }
+
+  /**
+   * W2 §2.5: read the adapter-recorded delivery intents out of a run's step
+   * results. The runtime notification adapter (intent mode) embeds the intent
+   * at `stepResult.payload.deliveryIntent`; anything that fails the strict
+   * `outbox.delivery.v1` schema is traced and skipped. A malformed payload
+   * must never block the run projection write, and it must never be enqueued
+   * half-validated either.
+   */
+  private collectRunDeliveryIntents(run: Run): OutboxDeliveryIntent[] {
+    const intents: OutboxDeliveryIntent[] = [];
+    for (const step of run.stepResults ?? []) {
+      const candidate = step.payload?.deliveryIntent;
+      if (candidate === undefined) continue;
+      const parsed = outboxDeliveryIntentSchema.safeParse(candidate);
+      if (!parsed.success) {
+        this.traceLog.record({
+          scope: "control-plane",
+          action: "outbox_delivery_intent_skipped",
+          metadata: {
+            runId: run.id,
+            stepId: step.stepId,
+            reason: parsed.error.issues.map((issue) => issue.message).join("; ")
+          }
+        });
+        continue;
+      }
+      intents.push(parsed.data);
+    }
+    return intents;
+  }
+
+  /**
+   * W2 §2.5: the single transactional write path for the `runs` projection.
+   *
+   * `insert` writes a brand-new row (inline `createRun`), `update` rewrites an
+   * existing one (durable job loop, inline approval resume). When the outbox
+   * kill switch is ON, every delivery intent carried in `run.stepResults` is
+   * enqueued **inside the same transaction**: the run projection can never
+   * commit without its delivery intent, and a failing enqueue (e.g. an
+   * idempotency key already bound to a different intent) rolls the projection
+   * write back with it — closing the A4 double-write window.
+   *
+   * Switch OFF (the default, `NEUROCLAW_OUTBOX_DISPATCH_ENABLED !== "1"`) keeps
+   * the previous behavior byte-for-byte: the row is written and nothing else
+   * happens.
+   */
+  async persistRunProjection(run: Run, mode: "insert" | "update"): Promise<void> {
+    const { enabled } = resolveOutboxDispatchConfig();
+    await this.db.transaction(async (tx) => {
+      if (mode === "insert") {
+        await tx.insert(runs).values(runToInsert(run));
+      } else {
+        await tx.update(runs).set(runToInsert(run)).where(eq(runs.id, run.id));
+      }
+
+      if (!enabled) return;
+
+      for (const intent of this.collectRunDeliveryIntents(run)) {
+        await this.enqueueDeliveryIntentInTx(tx, { run, intent });
+      }
     });
   }
 
@@ -4050,7 +4213,7 @@ export class ControlPlaneService {
       }
 
       const result = await this.temporalWorker.submitQueuedRun(run);
-      await this.db.insert(runs).values(runToInsert(result.run));
+      await this.persistRunProjection(result.run, "insert");
       await this.persistExecutionOutcome(result);
 
       span.setAttribute("runId", result.run.id);
@@ -4122,10 +4285,7 @@ export class ControlPlaneService {
       if (after[0]?.status === "cancelled" && result.result.run.status !== "cancelled") {
         return true;
       }
-      await this.db
-        .update(runs)
-        .set(runToInsert(result.result.run))
-        .where(eq(runs.id, result.result.run.id));
+      await this.persistRunProjection(result.result.run, "update");
       await this.persistExecutionOutcome(result.result, claimed.payload?.relayId);
     } else if (result.status === "failed") {
       // Permanent failure after retries — surface on the run row for the UI.
@@ -4391,7 +4551,7 @@ export class ControlPlaneService {
       const resumed = await this.temporalWorker.resumeApprovedRun(reviewedRun, [
         activeRequest.actionType
       ]);
-      await this.db.update(runs).set(runToInsert(resumed.run)).where(eq(runs.id, runId));
+      await this.persistRunProjection(resumed.run, "update");
       // Wave 1 wiring: the inline resume path bypasses persistExecutionOutcome,
       // so its event stream must be wired here too.
       await this.persistRuntimeEventStream(resumed.run, resumed.events);
