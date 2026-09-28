@@ -123,21 +123,27 @@ describe("I-042 D1 run lifecycle checkpoint persistence", () => {
     expect(loaded[0].seq).toBeGreaterThan(0);
   });
 
-  it("rolls back and re-applies migrations 0014 + 0013 in order", async () => {
+  it("rolls back and re-applies migrations 0015 + 0014 + 0013 in order", async () => {
     const db = await setupDb();
     expect(await runMigrations(db)).toEqual([]);
 
-    // 0013 is no longer the latest applied migration: 0014 must go first.
+    // 0015 is the latest applied migration: 0014 (and 0013 below it) can only
+    // be rolled back after 0015 is gone.
     await expect(rollbackMigration(db, "0013_run_lifecycle_checkpoints")).rejects.toThrow(
       /later migration/i
     );
+    await expect(rollbackMigration(db, "0014_checkpoint_seq_and_job_idempotency")).rejects.toThrow(
+      /later migration/i
+    );
+    expect(await rollbackMigration(db, "0015_agents_role")).toBe(true);
     expect(await rollbackMigration(db, "0014_checkpoint_seq_and_job_idempotency")).toBe(true);
     expect(await rollbackMigration(db, "0013_run_lifecycle_checkpoints")).toBe(true);
     await expect(loadCheckpoints(db, "run_i042_after_rollback")).rejects.toThrow();
 
     expect(await runMigrations(db)).toEqual([
       "0013_run_lifecycle_checkpoints",
-      "0014_checkpoint_seq_and_job_idempotency"
+      "0014_checkpoint_seq_and_job_idempotency",
+      "0015_agents_role"
     ]);
     const checkpoint = {
       runId: "run_i042_after_rollback",
