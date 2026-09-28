@@ -1,6 +1,13 @@
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
+// `--no-experimental-webstorage` was added in Node 22.4; passing it to older
+// runtimes (CI pins Node 20) makes every fork worker die with "bad option"
+// (exit code 9) before a single test runs. Gate it on the running version.
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+const supportsNoWebstorageFlag =
+  nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 4);
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -64,7 +71,7 @@ export default defineConfig({
     pool: "forks",
     maxWorkers: 1,
     isolate: true,
-    execArgv: ["--no-experimental-webstorage"]
+    execArgv: supportsNoWebstorageFlag ? ["--no-experimental-webstorage"] : []
   },
   coverage: {
     provider: "v8",
