@@ -194,7 +194,7 @@ function buildContentBriefPrompt(input: TemplateInputPayload): string {
   return `Business context: ${String(input.businessSummary ?? "N/A")}
 Target customer: ${String(input.targetCustomer ?? "N/A")}
 Preferred channels: ${Array.isArray(input.preferredChannels) ? input.preferredChannels.join(", ") : "N/A"}
-Content goal: ${String(input.contentGoal ?? "N/A")}${formatBenchmarkContext(input)}
+Content goal: ${String(input.contentGoal ?? "N/A")}${formatBenchmarkContext(input)}${formatHandoffContext(input)}
 
 Generate 3-5 compelling content angles and recommend the best channels for distribution.`;
 }
@@ -203,7 +203,7 @@ function buildConversionCopyPrompt(input: TemplateInputPayload): string {
   return `Offer context: ${String(input.businessSummary ?? "N/A")}
 Lead segment: ${String(input.targetCustomer ?? "N/A")}
 Outreach channels: ${Array.isArray(input.preferredChannels) ? input.preferredChannels.join(", ") : "N/A"}
-Offer asset: ${String(input.offerAsset ?? "N/A")}${formatBenchmarkContext(input)}
+Offer asset: ${String(input.offerAsset ?? "N/A")}${formatBenchmarkContext(input)}${formatHandoffContext(input)}
 
 Write a compelling conversion message that drives action. The message should be personalized, concise, and include a clear call-to-action.`;
 }
@@ -258,6 +258,32 @@ export function formatBenchmarkContext(input: TemplateInputPayload): string {
     : "";
 }
 
+// AW-5 R1 (legacy gap): optional structured handoff from the previous relay
+// step, injected by the control plane as `input.handoffPayload` (contract-
+// validated accepted fields only; second relay step onward). Degrades to ""
+// when the key is absent or malformed.
+export function formatHandoffContext(input: TemplateInputPayload): string {
+  const payload = input.handoffPayload;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "";
+  }
+
+  const lines = Object.entries(payload as Record<string, unknown>)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([field, value]) => {
+      const rendered = Array.isArray(value)
+        ? value.map((entry) => String(entry)).join(", ")
+        : typeof value === "object"
+          ? (JSON.stringify(value) ?? String(value))
+          : String(value);
+      return `- ${field}: ${rendered}`;
+    });
+
+  return lines.length > 0
+    ? `\nHandoff from previous step (contract-validated fields):\n${lines.join("\n")}`
+    : "";
+}
+
 function buildWeeklyReviewPrompt(input: TemplateInputPayload): string {
   const metricsSummary = typeof input.metricsSummary === "string" && input.metricsSummary.trim()
     ? `\nMetrics summary: ${input.metricsSummary.trim()}`
@@ -266,7 +292,7 @@ function buildWeeklyReviewPrompt(input: TemplateInputPayload): string {
   return `Business context: ${String(input.businessSummary ?? "N/A")}
 Audience: ${String(input.targetCustomer ?? "N/A")}
 Relevant channels: ${Array.isArray(input.preferredChannels) ? input.preferredChannels.join(", ") : "N/A"}
-Metrics window: ${String(input.metricsWindowDays ?? "7")} days${metricsSummary}${formatStructuredMetrics(input)}${formatBenchmarkContext(input)}
+Metrics window: ${String(input.metricsWindowDays ?? "7")} days${metricsSummary}${formatStructuredMetrics(input)}${formatBenchmarkContext(input)}${formatHandoffContext(input)}
 
 Analyze the past week's performance and provide:
 1. A concise review summary highlighting wins and areas for improvement
